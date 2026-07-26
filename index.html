@@ -3,154 +3,532 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Mill Creek — Connectivity Test</title>
+<title>Mill Creek Engineering — Fab Lab Queue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --cardinal: #8B2331; --navy: #0C223F; --gold: #C7B683;
-    --cream: #F7F5F0; --ink: #1B2230; --slate: #5C6577; --border: #E5E1D6;
+    --cardinal: #8B2331; --navy: #0C223F; --navy-deep: #081627;
+    --gold: #C7B683; --gold-deep: #AD9563; --cream: #F7F5F0; --paper: #FFFFFF;
+    --ink: #1B2230; --slate: #5C6577; --slate-light: #98A1B0; --border: #E5E1D6;
   }
-  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; background: var(--cream); color: var(--ink); margin: 0; padding: 40px 24px; }
-  .wrap { max-width: 720px; margin: 0 auto; }
-  h1 { font-size: 22px; margin-bottom: 4px; }
-  .sub { color: var(--slate); font-size: 14px; margin-bottom: 32px; }
-  .level { background: white; border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
-  .level h2 { font-size: 16px; margin: 0 0 4px; }
-  .level .desc { font-size: 13px; color: var(--slate); margin-bottom: 16px; }
-  label { display: block; font-size: 12px; font-weight: 600; margin: 12px 0 4px; color: var(--slate); }
-  input, textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: monospace; }
-  textarea { min-height: 90px; }
-  button { margin-top: 14px; background: var(--navy); color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
-  button:hover { background: #16305c; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .result { margin-top: 14px; padding: 12px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; white-space: pre-wrap; word-break: break-word; display: none; }
-  .result.pass { background: #C7B68322; border: 1px solid var(--gold); display: block; }
-  .result.fail { background: #8B233114; border: 1px solid var(--cardinal); display: block; color: var(--cardinal); }
-  .result.pending { background: #EEEBE2; border: 1px solid var(--border); display: block; color: var(--slate); }
-  .status-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
-  .status-badge.pass { background: var(--gold); color: var(--navy); }
-  .status-badge.fail { background: var(--cardinal); color: white; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter', sans-serif; background: var(--cream); color: var(--ink); }
+  h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  button { font-family: inherit; cursor: pointer; }
+
+  #login-screen { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; background: var(--navy-deep); }
+  #login-screen::before { content: ""; position: absolute; inset: 0; background: radial-gradient(600px circle at 20% 20%, var(--navy) 0%, transparent 60%); }
+  .login-accent-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: linear-gradient(90deg, var(--cardinal), var(--gold)); }
+  .login-card { position: relative; z-index: 1; width: 380px; padding: 32px; border-radius: 16px; background: var(--paper); }
+  .brand-row { display: flex; align-items: center; gap: 8px; }
+  .brand-mark { width: 32px; height: 32px; border-radius: 8px; background: var(--cardinal); display: flex; align-items: center; justify-content: center; color: var(--gold); font-weight: 700; font-size: 15px; flex-shrink: 0; }
+  .brand-eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; color: var(--slate-light); }
+  .login-title { font-size: 20px; font-weight: 600; margin: 16px 0 4px; }
+  .login-sub { font-size: 14px; color: var(--slate); margin: 0 0 24px; }
+  .google-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: white; font-size: 14px; font-weight: 500; color: var(--ink); }
+  .google-btn:hover { background: #FAFAF9; }
+  .login-footnote { font-size: 11px; text-align: center; margin-top: 16px; color: var(--slate-light); }
+  .login-error { font-size: 12px; color: var(--cardinal); background: #8B233114; border: 1px solid var(--cardinal); border-radius: 8px; padding: 10px 12px; margin-top: 14px; display: none; }
+
+  #app-screen { display: none; width: 100vw; height: 100vh; }
+  #app-screen.visible { display: flex; }
+  #sidebar { width: 248px; flex-shrink: 0; background: var(--navy); display: flex; flex-direction: column; }
+  .sidebar-header { display: flex; align-items: center; gap: 8px; padding: 20px; }
+  .sidebar-brand-name { font-size: 14px; font-weight: 600; color: var(--cream); line-height: 1.2; }
+  .sidebar-brand-sub { font-size: 11px; color: var(--gold); }
+  #nav-list { flex: 1; padding: 8px 12px; margin-top: 8px; }
+  .nav-item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 2px; border-radius: 8px; border: none; background: transparent; color: #9AA6BB; font-size: 14px; border-left: 2px solid transparent; text-align: left; }
+  .nav-item.active { background: #FFFFFF12; color: var(--cream); border-left: 2px solid var(--gold); }
+  .nav-item:not(.active):hover { background: #FFFFFF08; }
+  .nav-item.disabled { opacity: 0.4; cursor: default; }
+  .account-row { display: flex; align-items: center; gap: 10px; padding: 16px; border-top: 1px solid #FFFFFF14; }
+  .account-avatar { width: 32px; height: 32px; border-radius: 999px; background: var(--gold); color: var(--navy); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; overflow: hidden; }
+  .account-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .account-name { font-size: 12px; font-weight: 500; color: var(--cream); }
+  .account-role { font-size: 11px; color: #7E8AA0; }
+  .account-row button { margin-left: auto; background: none; border: none; display: flex; }
+
+  #main { flex: 1; overflow-y: auto; padding: 32px; }
+  .page-eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; color: var(--slate-light); margin-bottom: 4px; }
+  .page-title { font-size: 24px; font-weight: 600; margin: 0 0 24px; }
+  .card { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; }
+  .pill { font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 999px; letter-spacing: 0.02em; }
+  .pill.neutral { background: #EEEBE2; color: var(--slate); }
+  .pill.gold { background: rgba(199,182,131,0.13); color: var(--gold-deep); }
+  .pill.cardinal { background: rgba(139,35,49,0.08); color: var(--cardinal); }
+  .list-row { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; }
+  .list-row + .list-row { border-top: 1px solid var(--border); }
+  .row-title { font-size: 14px; font-weight: 500; }
+  .row-sub { font-size: 12px; color: var(--slate-light); margin-top: 2px; }
+  .empty-hint { padding: 32px; text-align: center; color: var(--slate-light); font-size: 13px; }
+
+  .path-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .path-card { padding: 20px; display: flex; flex-direction: column; gap: 10px; text-align: left; border: 1px solid var(--border); background: var(--paper); border-radius: 12px; }
+  .path-card.selected { border-color: var(--gold-deep); box-shadow: 0 0 0 2px rgba(199,182,131,0.3); }
+  .path-card h3 { font-size: 14px; margin: 0; }
+  .path-card p { font-size: 12px; color: var(--slate); line-height: 1.5; margin: 0; }
+
+  .form-section { padding: 24px; margin-bottom: 20px; }
+  .form-row { margin-bottom: 16px; }
+  label.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--slate); margin-bottom: 6px; }
+  input[type=text], input[type=number], select {
+    width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: 'Inter';
+  }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .file-drop { border: 1.5px dashed var(--border); border-radius: 10px; padding: 20px; text-align: center; font-size: 13px; color: var(--slate); margin-top: 8px; }
+  .file-drop.has-file { border-color: var(--gold-deep); color: var(--ink); }
+  .primary-btn { background: var(--navy); color: white; border: none; padding: 11px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; }
+  .primary-btn:hover { background: #16305c; }
+  .primary-btn:disabled { opacity: 0.5; cursor: default; }
+  .status-msg { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-top: 14px; display: none; }
+  .status-msg.pending { background: #EEEBE2; color: var(--slate); display: block; }
+  .status-msg.success { background: rgba(199,182,131,0.13); color: var(--gold-deep); display: block; }
+  .status-msg.error { background: #8B233114; color: var(--cardinal); display: block; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Mill Creek — Connectivity Test <span id="level1-badge"></span><span id="level2-badge"></span></h1>
-  <p class="sub">Host this file on GitHub Pages. It tests whether this static page can talk to Apps Script (Level 1) and Firebase (Level 2). Nothing here is part of the real app.</p>
 
-  <!-- LEVEL 1: APPS SCRIPT -->
-  <div class="level">
-    <h2>Level 1 — Apps Script (cross-origin fetch)</h2>
-    <p class="desc">Paste the /exec URL from your test Apps Script deployment (Code.gs test file, deployed as a Web App).</p>
-    <label>Apps Script /exec URL</label>
-    <input id="as-url" type="text" placeholder="https://script.google.com/macros/s/XXXXXXXX/exec" />
-    <button onclick="testAppsScript()">Run Apps Script test (GET + POST)</button>
-    <div id="as-result-get" class="result"></div>
-    <div id="as-result-post" class="result"></div>
-  </div>
-
-  <!-- LEVEL 2: FIREBASE -->
-  <div class="level">
-    <h2>Level 2 — Firebase (Firestore read/write)</h2>
-    <p class="desc">Paste your Firebase web config object (from Firebase Console → Project Settings → Your apps → SDK setup). This is safe to be public — it's not a secret, Firestore security rules are the actual boundary.</p>
-    <label>Firebase config (paste the JS object, e.g. {"apiKey": "...", "projectId": "...", ...})</label>
-    <textarea id="fb-config" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
-    <button onclick="testFirebase()">Run Firebase test (write + read)</button>
-    <div id="fb-result" class="result"></div>
+<div id="login-screen">
+  <div class="login-accent-bar"></div>
+  <div class="login-card">
+    <div class="brand-row">
+      <div class="brand-mark">M</div>
+      <span class="brand-eyebrow">Mill Creek Engineering</span>
+    </div>
+    <h1 class="login-title">Print &amp; laser queue</h1>
+    <p class="login-sub">Sign in with your school Google account to submit or manage jobs.</p>
+    <button class="google-btn" id="google-signin-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.52 12.27c0-.85-.08-1.67-.22-2.45H12v4.63h6.47c-.28 1.5-1.13 2.78-2.4 3.63v3.02h3.89c2.28-2.1 3.56-5.19 3.56-8.83z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.95-2.9l-3.89-3.02c-1.08.73-2.46 1.16-4.06 1.16-3.12 0-5.77-2.1-6.71-4.93H1.27v3.1C3.25 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.29 14.31c-.24-.73-.38-1.5-.38-2.31s.14-1.58.38-2.31V6.59H1.27C.46 8.23 0 10.06 0 12s.46 3.77 1.27 5.41l4.02-3.1z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.79l3.44-3.44C17.95 1.19 15.24 0 12 0 7.31 0 3.25 2.7 1.27 6.59l4.02 3.1C6.23 6.86 8.88 4.77 12 4.77z"/></svg>
+      Continue with Google
+    </button>
+    <div class="login-error" id="login-error"></div>
+    <p class="login-footnote">Restricted to district Workspace accounts</p>
   </div>
 </div>
 
+<div id="app-screen">
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="brand-mark">M</div>
+      <div>
+        <div class="sidebar-brand-name">Mill Creek</div>
+        <div class="sidebar-brand-sub">Fab Lab Queue</div>
+      </div>
+    </div>
+    <nav id="nav-list"></nav>
+    <div class="account-row">
+      <div class="account-avatar" id="account-avatar"></div>
+      <div>
+        <div class="account-name" id="account-name"></div>
+        <div class="account-role" id="account-role"></div>
+      </div>
+      <button onclick="signOutUser()" title="Sign out">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7E8AA0" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<!-- Firebase (compat SDK — no build step needed) -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
 <script>
-function setResult(id, status, text) {
-  const el = document.getElementById(id);
-  el.className = "result " + status;
-  el.textContent = text;
-}
-function setBadge(levelId, status) {
-  document.getElementById(levelId).outerHTML =
-    `<span id="${levelId}" class="status-badge ${status}">${status === "pass" ? "PASS" : "FAIL"}</span>`;
-}
+/* =========================================================
+   CONFIG — the only things you should need to edit
+========================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyAu-wxO-5Jr1jQvAH-gL6aYdoZD3yyNuKQ",
+  authDomain: "makerspace-45087.firebaseapp.com",
+  projectId: "makerspace-45087",
+  storageBucket: "makerspace-45087.firebasestorage.app",
+  messagingSenderId: "288948328757",
+  appId: "1:288948328757:web:75791b67ddaaf30404147c",
+  measurementId: "G-7055KGRPZD"
+};
 
-/* ---------------- LEVEL 1: APPS SCRIPT ---------------- */
-async function testAppsScript() {
-  const url = document.getElementById("as-url").value.trim();
-  if (!url) { alert("Paste your Apps Script /exec URL first."); return; }
+// TODO: replace with your real district Workspace domain, e.g. "millcreekschools.org"
+const SCHOOL_DOMAIN = "REPLACE_WITH_YOUR_SCHOOL_DOMAIN";
 
-  setResult("as-result-get", "pending", "Running GET test...");
-  setResult("as-result-post", "pending", "Waiting on GET test to finish...");
+// TODO: replace with your real Apps Script /exec deployment URL (Execute as: Me)
+const APPS_SCRIPT_URL = "REPLACE_WITH_YOUR_APPS_SCRIPT_EXEC_URL";
 
-  let getPassed = false, postPassed = false;
+/* =========================================================
+   INIT
+========================================================= */
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
 
-  // GET test
-  try {
-    const res = await fetch(url + "?ping=hello", { method: "GET" });
-    const data = await res.json();
-    getPassed = !!data.ok;
-    setResult("as-result-get", getPassed ? "pass" : "fail",
-      "GET " + (getPassed ? "PASSED" : "FAILED — unexpected response") + "\n" + JSON.stringify(data, null, 2));
-  } catch (err) {
-    setResult("as-result-get", "fail", "GET FAILED — browser blocked or errored:\n" + err.message +
-      "\n\nIf this says 'Failed to fetch' or mentions CORS, the browser blocked the cross-origin request before Apps Script ever saw it.");
+let currentUser = null;
+let currentRole = "student"; // resolved from Firestore users/{uid} after sign-in
+let state = { page: "home", submitPath: null, submitJobType: null, submitFile: null };
+
+const NAV = {
+  student: [
+    { key: "home", label: "Dashboard", enabled: true },
+    { key: "submit", label: "Submit a Job", enabled: true },
+    { key: "learn", label: "Learning", enabled: false },
+  ],
+  peer_leader: [
+    { key: "queue", label: "Live Queue", enabled: false },
+    { key: "batches", label: "Batches", enabled: false },
+    { key: "printers", label: "Printer Status", enabled: false },
+  ],
+  teacher: [
+    { key: "overview", label: "Overview", enabled: false },
+    { key: "reports", label: "Reports", enabled: false },
+    { key: "fleet", label: "Printer Fleet", enabled: false },
+    { key: "roster", label: "Roster", enabled: false },
+  ],
+};
+const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "Teacher / Admin" };
+
+/* =========================================================
+   AUTH
+========================================================= */
+document.getElementById("google-signin-btn").addEventListener("click", signIn);
+
+function signIn() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  if (SCHOOL_DOMAIN && SCHOOL_DOMAIN !== "REPLACE_WITH_YOUR_SCHOOL_DOMAIN") {
+    provider.setCustomParameters({ hd: SCHOOL_DOMAIN }); // hints Google to show school accounts first
   }
-
-  // POST test
-  setResult("as-result-post", "pending", "Running POST test...");
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight (see note below)
-      body: JSON.stringify({ testField: "hello from GitHub Pages" }),
-    });
-    const data = await res.json();
-    postPassed = !!data.ok;
-    setResult("as-result-post", postPassed ? "pass" : "fail",
-      "POST " + (postPassed ? "PASSED" : "FAILED — unexpected response") + "\n" + JSON.stringify(data, null, 2));
-  } catch (err) {
-    setResult("as-result-post", "fail", "POST FAILED — browser blocked or errored:\n" + err.message);
-  }
-
-  setBadge("level1-badge", (getPassed && postPassed) ? "pass" : "fail");
+  auth.signInWithPopup(provider).catch(err => showLoginError("Sign-in failed: " + err.message));
 }
 
-/* ---------------- LEVEL 2: FIREBASE ---------------- */
-async function testFirebase() {
-  const raw = document.getElementById("fb-config").value.trim();
-  if (!raw) { alert("Paste your Firebase config object first."); return; }
+function signOutUser() {
+  auth.signOut();
+}
 
-  let config;
-  try {
-    config = JSON.parse(raw);
-  } catch (err) {
-    setResult("fb-result", "fail", "Couldn't parse that as JSON. Make sure keys and string values are in double quotes.\n" + err.message);
+function showLoginError(msg) {
+  const el = document.getElementById("login-error");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+
+auth.onAuthStateChanged(async (user) => {
+  if (!user) {
+    currentUser = null;
+    document.getElementById("app-screen").classList.remove("visible");
+    document.getElementById("login-screen").style.display = "flex";
     return;
   }
 
-  setResult("fb-result", "pending", "Connecting to Firebase...");
+  // Domain check — the "hd" param above only hints the account picker, it doesn't
+  // actually enforce anything. This is the real enforcement.
+  if (SCHOOL_DOMAIN && SCHOOL_DOMAIN !== "REPLACE_WITH_YOUR_SCHOOL_DOMAIN" &&
+      !user.email.endsWith("@" + SCHOOL_DOMAIN)) {
+    showLoginError("Please sign in with your school (" + SCHOOL_DOMAIN + ") account.");
+    auth.signOut();
+    return;
+  }
+
+  currentUser = user;
+
+  // Look up (or create) this user's role record.
+  const userDocRef = db.collection("users").doc(user.uid);
+  const userDoc = await userDocRef.get();
+  if (userDoc.exists) {
+    currentRole = userDoc.data().role || "student";
+  } else {
+    // First time we've seen this account — default to student.
+    // Promote to peer_leader/teacher manually in the Firestore console for now;
+    // roster import (Phase 5) will handle this properly.
+    await userDocRef.set({
+      name: user.displayName || "",
+      email: user.email,
+      role: "student",
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    currentRole = "student";
+  }
+
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app-screen").classList.add("visible");
+  state.page = NAV[currentRole][0].key;
+  renderShell();
+});
+
+/* =========================================================
+   SHELL RENDER (sidebar + account)
+========================================================= */
+function renderShell() {
+  const nav = NAV[currentRole];
+  document.getElementById("nav-list").innerHTML = nav.map(item => {
+    const active = state.page === item.key;
+    const disabledClass = item.enabled ? "" : "disabled";
+    return `<button class="nav-item ${active ? "active" : ""} ${disabledClass}"
+      onclick="${item.enabled ? `setPage('${item.key}')` : ""}">${item.label}${item.enabled ? "" : " · soon"}</button>`;
+  }).join("");
+
+  document.getElementById("account-name").textContent = currentUser.displayName || currentUser.email;
+  document.getElementById("account-role").textContent = ROLE_LABEL[currentRole];
+  const avatarEl = document.getElementById("account-avatar");
+  avatarEl.innerHTML = currentUser.photoURL
+    ? `<img src="${currentUser.photoURL}" />`
+    : (currentUser.displayName || currentUser.email)[0].toUpperCase();
+
+  renderMain();
+}
+
+function setPage(key) {
+  state.page = key;
+  state.submitPath = null; state.submitJobType = null; state.submitFile = null;
+  renderShell();
+}
+
+/* =========================================================
+   MAIN PAGE ROUTER
+========================================================= */
+function renderMain() {
+  const main = document.getElementById("main");
+  if (state.page === "home") return renderHome(main);
+  if (state.page === "submit") return renderSubmit(main);
+  main.innerHTML = `<div class="empty-hint">This page isn't built yet.</div>`;
+}
+
+/* =========================================================
+   HOME / DASHBOARD — real Firestore query
+========================================================= */
+async function renderHome(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Student · ${currentUser.email}</div>
+    <h1 class="page-title">Your submissions</h1>
+    <div class="card" id="submissions-list"><div class="empty-hint">Loading…</div></div>
+  `;
+
+  const snap = await db.collection("submissions")
+    .where("studentNumber", "==", currentUser.uid)
+    .orderBy("createdAt", "desc")
+    .get();
+
+  if (snap.empty) {
+    document.getElementById("submissions-list").innerHTML =
+      `<div class="empty-hint">No submissions yet — head to "Submit a Job" to start one.</div>`;
+    return;
+  }
+
+  const rowsHtml = [];
+  for (const doc of snap.docs) {
+    const sub = doc.data();
+    const partsSnap = await db.collection("parts").where("submissionId", "==", doc.id).get();
+    const total = partsSnap.size;
+    const complete = partsSnap.docs.filter(p => ["Complete", "Picked up"].includes(p.data().status)).length;
+    const flagged = partsSnap.docs.some(p => (p.data().status || "").startsWith("Flagged"));
+    const tone = flagged ? "cardinal" : (complete === total && total > 0) ? "gold" : "neutral";
+    const statusLabel = flagged ? "Flagged — see part detail" : `${complete} of ${total} parts complete`;
+
+    rowsHtml.push(`<div class="list-row">
+      <div>
+        <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
+        <div class="row-sub">${statusLabel}</div>
+      </div>
+      <span class="pill ${tone}">${escapeHtml(sub.overallStatus || "Submitted")}</span>
+    </div>`);
+  }
+  document.getElementById("submissions-list").innerHTML = rowsHtml.join("");
+}
+
+/* =========================================================
+   SUBMIT — guided flow, writes real Firestore docs + uploads file via Apps Script
+========================================================= */
+function renderSubmit(main) {
+  const paths = [
+    { key: "solo", title: "Solo, student-sliced", tag: "Default", body: "Upload the .3mf you've already sliced in Bambu Studio." },
+    { key: "batch", title: "Add to batch", tag: "Non-urgent", body: "Upload a raw STL. A peer leader will combine it with others." },
+    { key: "assisted", title: "Peer-leader slices for you", tag: "New to Bambu Studio", body: "Upload a raw STL — a peer leader will slice it directly." },
+  ];
+
+  main.innerHTML = `
+    <div class="page-eyebrow">Student · New submission</div>
+    <h1 class="page-title">Submit a job</h1>
+
+    <div class="path-grid">
+      ${paths.map(p => `<button class="path-card ${state.submitPath === p.key ? "selected" : ""}" onclick="selectPath('${p.key}')">
+        <h3>${p.title}</h3>
+        <span class="pill gold">${p.tag}</span>
+        <p>${p.body}</p>
+      </button>`).join("")}
+    </div>
+
+    <div class="card form-section" id="submit-form" style="${state.submitPath ? "" : "display:none;"}">
+      <div class="form-row">
+        <label class="field-label">Submission label</label>
+        <input type="text" id="f-label" placeholder="e.g. Bracket assembly" />
+      </div>
+      <div class="two-col">
+        <div class="form-row">
+          <label class="field-label">Job type</label>
+          <select id="f-jobtype" onchange="onJobTypeChange()">
+            <option value="print">3D Print</option>
+            <option value="laser">Laser</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="field-label">Quantity</label>
+          <input type="number" id="f-quantity" min="1" value="1" />
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="form-row">
+          <label class="field-label" id="f-material-label">Material</label>
+          <input type="text" id="f-material" placeholder="e.g. PLA" />
+        </div>
+        <div class="form-row">
+          <label class="field-label">Color</label>
+          <input type="text" id="f-color" placeholder="e.g. Cardinal red" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="field-label" id="f-file-label">File (.3mf)</label>
+        <input type="file" id="f-file" onchange="onFileChosen()" />
+        <div class="file-drop" id="file-drop-hint">No file selected yet</div>
+      </div>
+      <div class="form-row">
+        <button class="primary-btn" id="submit-btn" onclick="submitJob()">Submit job</button>
+      </div>
+      <div class="status-msg" id="submit-status"></div>
+    </div>
+  `;
+  onJobTypeChange();
+}
+
+function selectPath(key) {
+  state.submitPath = key;
+  renderSubmit(document.getElementById("main"));
+}
+
+function onJobTypeChange() {
+  const jobType = document.getElementById("f-jobtype").value;
+  state.submitJobType = jobType;
+  const fileInput = document.getElementById("f-file");
+  const fileLabel = document.getElementById("f-file-label");
+  const materialLabel = document.getElementById("f-material-label");
+  if (jobType === "print") {
+    fileInput.accept = ".3mf,.stl";
+    fileLabel.textContent = "File (.3mf preferred, .stl accepted)";
+    materialLabel.textContent = "Material";
+  } else {
+    fileInput.accept = ".ai,.pdf";
+    fileLabel.textContent = "File (.ai)";
+    materialLabel.textContent = "Material (e.g. 1/8in acrylic, plywood)";
+  }
+}
+
+function onFileChosen() {
+  const fileInput = document.getElementById("f-file");
+  const hint = document.getElementById("file-drop-hint");
+  if (fileInput.files.length > 0) {
+    state.submitFile = fileInput.files[0];
+    hint.textContent = "Selected: " + state.submitFile.name;
+    hint.classList.add("has-file");
+  } else {
+    state.submitFile = null;
+    hint.textContent = "No file selected yet";
+    hint.classList.remove("has-file");
+  }
+}
+
+function setSubmitStatus(kind, text) {
+  const el = document.getElementById("submit-status");
+  el.className = "status-msg " + kind;
+  el.textContent = text;
+}
+
+async function submitJob() {
+  const label = document.getElementById("f-label").value.trim();
+  const jobType = document.getElementById("f-jobtype").value;
+  const quantity = parseInt(document.getElementById("f-quantity").value, 10) || 1;
+  const material = document.getElementById("f-material").value.trim();
+  const color = document.getElementById("f-color").value.trim();
+
+  if (!label) { setSubmitStatus("error", "Give this submission a label first."); return; }
+  if (!state.submitFile) { setSubmitStatus("error", "Choose a file to upload."); return; }
+
+  document.getElementById("submit-btn").disabled = true;
+  setSubmitStatus("pending", "Creating submission…");
 
   try {
-    if (!firebase.apps.length) {
-      firebase.initializeApp(config);
-    }
-    const db = firebase.firestore();
-    const testDocRef = db.collection("connection_test").doc("ping");
+    // 1. Create the parent submission doc.
+    const submissionRef = await db.collection("submissions").add({
+      studentNumber: currentUser.uid,
+      label,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      overallStatus: "Submitted",
+    });
 
-    const writeValue = { message: "hello from GitHub Pages", timestamp: new Date().toISOString() };
-    await testDocRef.set(writeValue);
+    // 2. Create the part doc.
+    const partRef = await db.collection("parts").add({
+      submissionId: submissionRef.id,
+      jobType,
+      quantity,
+      material,
+      color,
+      batchable: state.submitPath === "batch",
+      status: "Submitted",
+      statusHistory: [{
+        status: "Submitted",
+        timestamp: new Date().toISOString(),
+        actor: currentUser.uid,
+        note: state.submitPath === "assisted" ? "Peer-leader slicing requested" : null,
+      }],
+      currentAssignee: null,
+      handoffNote: null,
+      fileRef: null,
+    });
 
-    const snap = await testDocRef.get();
-    const readBack = snap.exists ? snap.data() : null;
+    // 3. Upload the file via Apps Script (the browser can't write to Drive directly here).
+    setSubmitStatus("pending", "Uploading file…");
+    const fileUrl = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
 
-    const passed = readBack && readBack.message === writeValue.message;
-    setResult("fb-result", passed ? "pass" : "fail",
-      (passed ? "PASSED — wrote and read back successfully.\n\n" : "FAILED — wrote, but read-back didn't match.\n\n") +
-      "Wrote: " + JSON.stringify(writeValue, null, 2) + "\n\nRead back: " + JSON.stringify(readBack, null, 2));
-    setBadge("level2-badge", passed ? "pass" : "fail");
+    // 4. Store the resulting Drive link back on the part.
+    await db.collection("parts").doc(partRef.id).update({ fileRef: fileUrl });
+
+    setSubmitStatus("success", "Submitted! Head to your dashboard to track it.");
+    setTimeout(() => setPage("home"), 1200);
   } catch (err) {
-    setResult("fb-result", "fail",
-      "FAILED: " + err.message +
-      "\n\nCommon causes:\n- Firestore security rules blocking writes (check rules in Firebase Console)\n- Config values pasted wrong (check projectId especially)\n- Firestore database not yet created in this Firebase project (Console → Firestore Database → Create database)");
-    setBadge("level2-badge", "fail");
+    setSubmitStatus("error", "Something went wrong: " + err.message);
+    document.getElementById("submit-btn").disabled = false;
   }
+}
+
+function uploadFileViaAppsScript(file, submissionId, partId) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = reader.result.split(",")[1]; // strip "data:...;base64,"
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight
+          body: JSON.stringify({
+            action: "uploadFile",
+            submissionId,
+            partId,
+            fileName: file.name,
+            mimeType: file.type || "application/octet-stream",
+            fileDataBase64: base64,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) return reject(new Error(data.error || "Upload failed"));
+        resolve(data.fileUrl);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error("Couldn't read the file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 </script>
 </body>

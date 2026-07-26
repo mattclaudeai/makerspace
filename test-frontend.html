@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mill Creek — Connectivity Test</title>
+<style>
+  :root {
+    --cardinal: #8B2331; --navy: #0C223F; --gold: #C7B683;
+    --cream: #F7F5F0; --ink: #1B2230; --slate: #5C6577; --border: #E5E1D6;
+  }
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; background: var(--cream); color: var(--ink); margin: 0; padding: 40px 24px; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: var(--slate); font-size: 14px; margin-bottom: 32px; }
+  .level { background: white; border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  .level h2 { font-size: 16px; margin: 0 0 4px; }
+  .level .desc { font-size: 13px; color: var(--slate); margin-bottom: 16px; }
+  label { display: block; font-size: 12px; font-weight: 600; margin: 12px 0 4px; color: var(--slate); }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: monospace; }
+  textarea { min-height: 90px; }
+  button { margin-top: 14px; background: var(--navy); color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  button:hover { background: #16305c; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .result { margin-top: 14px; padding: 12px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; white-space: pre-wrap; word-break: break-word; display: none; }
+  .result.pass { background: #C7B68322; border: 1px solid var(--gold); display: block; }
+  .result.fail { background: #8B233114; border: 1px solid var(--cardinal); display: block; color: var(--cardinal); }
+  .result.pending { background: #EEEBE2; border: 1px solid var(--border); display: block; color: var(--slate); }
+  .status-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+  .status-badge.pass { background: var(--gold); color: var(--navy); }
+  .status-badge.fail { background: var(--cardinal); color: white; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mill Creek — Connectivity Test <span id="level1-badge"></span><span id="level2-badge"></span></h1>
+  <p class="sub">Host this file on GitHub Pages. It tests whether this static page can talk to Apps Script (Level 1) and Firebase (Level 2). Nothing here is part of the real app.</p>
+
+  <!-- LEVEL 1: APPS SCRIPT -->
+  <div class="level">
+    <h2>Level 1 — Apps Script (cross-origin fetch)</h2>
+    <p class="desc">Paste the /exec URL from your test Apps Script deployment (Code.gs test file, deployed as a Web App).</p>
+    <label>Apps Script /exec URL</label>
+    <input id="as-url" type="text" placeholder="https://script.google.com/macros/s/XXXXXXXX/exec" />
+    <button onclick="testAppsScript()">Run Apps Script test (GET + POST)</button>
+    <div id="as-result-get" class="result"></div>
+    <div id="as-result-post" class="result"></div>
+  </div>
+
+  <!-- LEVEL 2: FIREBASE -->
+  <div class="level">
+    <h2>Level 2 — Firebase (Firestore read/write)</h2>
+    <p class="desc">Paste your Firebase web config object (from Firebase Console → Project Settings → Your apps → SDK setup). This is safe to be public — it's not a secret, Firestore security rules are the actual boundary.</p>
+    <label>Firebase config (paste the JS object, e.g. {"apiKey": "...", "projectId": "...", ...})</label>
+    <textarea id="fb-config" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+    <button onclick="testFirebase()">Run Firebase test (write + read)</button>
+    <div id="fb-result" class="result"></div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script>
+function setResult(id, status, text) {
+  const el = document.getElementById(id);
+  el.className = "result " + status;
+  el.textContent = text;
+}
+function setBadge(levelId, status) {
+  document.getElementById(levelId).outerHTML =
+    `<span id="${levelId}" class="status-badge ${status}">${status === "pass" ? "PASS" : "FAIL"}</span>`;
+}
+
+/* ---------------- LEVEL 1: APPS SCRIPT ---------------- */
+async function testAppsScript() {
+  const url = document.getElementById("as-url").value.trim();
+  if (!url) { alert("Paste your Apps Script /exec URL first."); return; }
+
+  setResult("as-result-get", "pending", "Running GET test...");
+  setResult("as-result-post", "pending", "Waiting on GET test to finish...");
+
+  let getPassed = false, postPassed = false;
+
+  // GET test
+  try {
+    const res = await fetch(url + "?ping=hello", { method: "GET" });
+    const data = await res.json();
+    getPassed = !!data.ok;
+    setResult("as-result-get", getPassed ? "pass" : "fail",
+      "GET " + (getPassed ? "PASSED" : "FAILED — unexpected response") + "\n" + JSON.stringify(data, null, 2));
+  } catch (err) {
+    setResult("as-result-get", "fail", "GET FAILED — browser blocked or errored:\n" + err.message +
+      "\n\nIf this says 'Failed to fetch' or mentions CORS, the browser blocked the cross-origin request before Apps Script ever saw it.");
+  }
+
+  // POST test
+  setResult("as-result-post", "pending", "Running POST test...");
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight (see note below)
+      body: JSON.stringify({ testField: "hello from GitHub Pages" }),
+    });
+    const data = await res.json();
+    postPassed = !!data.ok;
+    setResult("as-result-post", postPassed ? "pass" : "fail",
+      "POST " + (postPassed ? "PASSED" : "FAILED — unexpected response") + "\n" + JSON.stringify(data, null, 2));
+  } catch (err) {
+    setResult("as-result-post", "fail", "POST FAILED — browser blocked or errored:\n" + err.message);
+  }
+
+  setBadge("level1-badge", (getPassed && postPassed) ? "pass" : "fail");
+}
+
+/* ---------------- LEVEL 2: FIREBASE ---------------- */
+async function testFirebase() {
+  const raw = document.getElementById("fb-config").value.trim();
+  if (!raw) { alert("Paste your Firebase config object first."); return; }
+
+  let config;
+  try {
+    config = JSON.parse(raw);
+  } catch (err) {
+    setResult("fb-result", "fail", "Couldn't parse that as JSON. Make sure keys and string values are in double quotes.\n" + err.message);
+    return;
+  }
+
+  setResult("fb-result", "pending", "Connecting to Firebase...");
+
+  try {
+    if (!firebase.apps.length) {
+      firebase.initializeApp(config);
+    }
+    const db = firebase.firestore();
+    const testDocRef = db.collection("connection_test").doc("ping");
+
+    const writeValue = { message: "hello from GitHub Pages", timestamp: new Date().toISOString() };
+    await testDocRef.set(writeValue);
+
+    const snap = await testDocRef.get();
+    const readBack = snap.exists ? snap.data() : null;
+
+    const passed = readBack && readBack.message === writeValue.message;
+    setResult("fb-result", passed ? "pass" : "fail",
+      (passed ? "PASSED — wrote and read back successfully.\n\n" : "FAILED — wrote, but read-back didn't match.\n\n") +
+      "Wrote: " + JSON.stringify(writeValue, null, 2) + "\n\nRead back: " + JSON.stringify(readBack, null, 2));
+    setBadge("level2-badge", passed ? "pass" : "fail");
+  } catch (err) {
+    setResult("fb-result", "fail",
+      "FAILED: " + err.message +
+      "\n\nCommon causes:\n- Firestore security rules blocking writes (check rules in Firebase Console)\n- Config values pasted wrong (check projectId especially)\n- Firestore database not yet created in this Firebase project (Console → Firestore Database → Create database)");
+    setBadge("level2-badge", "fail");
+  }
+}
+</script>
+</body>
+</html>

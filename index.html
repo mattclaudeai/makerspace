@@ -124,7 +124,7 @@
 </head>
 <body>
 
-<!-- LOGIN SCREEN WITH PIN ENTRY -->
+<!-- LOGIN SCREEN (STUDENT ID ONLY) -->
 <div id="login-screen">
   <div class="login-accent-bar"></div>
   <div class="login-card">
@@ -133,24 +133,21 @@
       <span class="brand-eyebrow">Mill Creek Engineering</span>
     </div>
     <h1 class="login-title">Print &amp; laser queue</h1>
-    <p class="login-sub">Enter your Student Number and PIN to sign in.</p>
+    <p class="login-sub">Enter your Student ID number to log in.</p>
     
-    <div class="form-group">
-      <label for="login-student-num">Student Number</label>
-      <input type="text" id="login-student-num" placeholder="e.g. 123456" />
-    </div>
+    <form onsubmit="signInWithStudentNumber(event)">
+      <div class="form-group">
+        <label for="login-student-num">Student ID Number</label>
+        <input type="text" id="login-student-num" placeholder="e.g. 123456" required autofocus />
+      </div>
 
-    <div class="form-group">
-      <label for="login-pin">PIN</label>
-      <input type="password" id="login-pin" placeholder="••••" />
-    </div>
-
-    <button class="submit-btn" id="pin-login-btn" onclick="signInWithPin()">
-      Sign In
-    </button>
+      <button type="submit" class="submit-btn" id="login-btn">
+        Continue
+      </button>
+    </form>
     
     <div class="login-error" id="login-error"></div>
-    <p class="login-footnote">Contact your teacher if you forgot your PIN</p>
+    <p class="login-footnote">Ask your teacher if your ID isn't working</p>
   </div>
 </div>
 
@@ -180,7 +177,7 @@
   <main id="main"></main>
 </div>
 
-<!-- Firebase SDKs (Compat — Storage/Auth not needed for simple PIN system, using Firestore) -->
+<!-- Firebase SDKs -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 
@@ -233,7 +230,7 @@ const NAV = {
 };
 const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "Teacher / Admin" };
 
-/* Check for stored session on load */
+/* Check for existing user session on page load */
 window.addEventListener("DOMContentLoaded", () => {
   const session = localStorage.getItem("lab_user_session");
   if (session) {
@@ -247,18 +244,21 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 /* =========================================================
-   PIN AUTHENTICATION
+   STUDENT ID AUTHENTICATION
 ========================================================= */
-async function signInWithPin() {
+async function signInWithStudentNumber(event) {
+  if (event) event.preventDefault();
+  
   const sNum = document.getElementById("login-student-num").value.trim();
-  const pin = document.getElementById("login-pin").value.trim();
+  const errorEl = document.getElementById("login-error");
+  errorEl.style.display = "none";
 
-  if (!sNum || !pin) {
-    showLoginError("Please enter both your Student Number and PIN.");
+  if (!sNum) {
+    showLoginError("Please enter your Student ID Number.");
     return;
   }
 
-  const btn = document.getElementById("pin-login-btn");
+  const btn = document.getElementById("login-btn");
   btn.disabled = true;
   btn.textContent = "Verifying…";
 
@@ -267,23 +267,15 @@ async function signInWithPin() {
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
-      showLoginError("Student ID not found on roster. Check with your teacher.");
+      showLoginError("Student ID not found on roster. Please check with your teacher.");
       btn.disabled = false;
-      btn.textContent = "Sign In";
+      btn.textContent = "Continue";
       return;
     }
 
     const userData = userDoc.data();
 
-    // Verify PIN match (supports either pinHash or direct pin match depending on roster format)
-    if (userData.pinHash !== pin && userData.pin !== pin) {
-      showLoginError("Incorrect PIN. Please try again.");
-      btn.disabled = false;
-      btn.textContent = "Sign In";
-      return;
-    }
-
-    // Success - cache local session
+    // Session object cached locally
     const sessionObj = {
       studentNumber: sNum,
       name: userData.name || `Student ${sNum}`,
@@ -297,7 +289,7 @@ async function signInWithPin() {
     showLoginError("Login failed: " + err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "Sign In";
+    btn.textContent = "Continue";
   }
 }
 
@@ -319,7 +311,6 @@ function signOutUser() {
   document.getElementById("app-screen").classList.remove("visible");
   document.getElementById("login-screen").style.display = "flex";
   document.getElementById("login-student-num").value = "";
-  document.getElementById("login-pin").value = "";
 }
 
 function showLoginError(msg) {

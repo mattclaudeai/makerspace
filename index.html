@@ -429,10 +429,19 @@ async function renderHome(main) {
     <div class="card" id="submissions-list"><div class="empty-hint">Loading…</div></div>
   `;
 
-  const snap = await db.collection("submissions")
-    .where("studentNumber", "==", currentStudentNumber)
-    .orderBy("createdAt", "desc")
-    .get();
+  let snap;
+  try {
+    // Filter only (no orderBy) so this doesn't require a Firestore composite index —
+    // we sort client-side instead.
+    snap = await db.collection("submissions")
+      .where("studentNumber", "==", currentStudentNumber)
+      .get();
+  } catch (err) {
+    console.error("Failed to load submissions:", err);
+    document.getElementById("submissions-list").innerHTML =
+      `<div class="empty-hint">Couldn't load your submissions: ${escapeHtml(err.message)}</div>`;
+    return;
+  }
 
   if (snap.empty) {
     document.getElementById("submissions-list").innerHTML =
@@ -440,8 +449,14 @@ async function renderHome(main) {
     return;
   }
 
+  const docsSorted = [...snap.docs].sort((a, b) => {
+    const aTime = a.data().createdAt?.toMillis ? a.data().createdAt.toMillis() : 0;
+    const bTime = b.data().createdAt?.toMillis ? b.data().createdAt.toMillis() : 0;
+    return bTime - aTime;
+  });
+
   const rowsHtml = [];
-  for (const doc of snap.docs) {
+  for (const doc of docsSorted) {
     const sub = doc.data();
     const partsSnap = await db.collection("parts").where("submissionId", "==", doc.id).get();
     const total = partsSnap.size;

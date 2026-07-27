@@ -419,19 +419,36 @@ function renderSubmit(main) {
     { key: "assisted", title: "Peer-leader slices for you", tag: "New to Bambu Studio", body: "Upload a raw STL — a peer leader will slice it directly." },
   ];
 
+  // Dynamic help banner based on selected path
+  let pathBanner = "";
+  if (state.submitPath === "solo") {
+    pathBanner = `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy); margin-bottom: 16px;">
+      <b>Solo Path:</b> Upload your pre-sliced <code>.3mf</code> file directly from Bambu Studio.
+    </div>`;
+  } else if (state.submitPath === "batch") {
+    pathBanner = `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy); margin-bottom: 16px;">
+      <b>Batching Bin:</b> Upload a raw <code>.stl</code> file. A peer leader will combine this with other jobs onto a single build plate.
+    </div>`;
+  } else if (state.submitPath === "assisted") {
+    pathBanner = `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy); margin-bottom: 16px;">
+      <b>Assisted Path:</b> Upload a raw <code>.stl</code> file. A peer leader will review and slice the file for you.
+    </div>`;
+  }
+
   main.innerHTML = `
     <div class="page-eyebrow">Student · New submission</div>
     <h1 class="page-title">Submit a job</h1>
 
     <div class="path-grid">
       ${paths.map(p => `<button class="path-card ${state.submitPath === p.key ? "selected" : ""}" onclick="selectPath('${p.key}')">
-        <h3>${p.title}</h3>
-        <span class="pill gold">${p.tag}</span>
-        <p>${p.body}</p>
+        <h3>${escapeHtml(p.title)}</h3>
+        <span class="pill gold">${escapeHtml(p.tag)}</span>
+        <p>${escapeHtml(p.body)}</p>
       </button>`).join("")}
     </div>
 
     <div class="card form-section" id="submit-form" style="${state.submitPath ? "" : "display:none;"}">
+      ${pathBanner}
       <div class="form-row">
         <label class="field-label">Submission label</label>
         <input type="text" id="f-label" placeholder="e.g. Bracket assembly" />
@@ -460,7 +477,7 @@ function renderSubmit(main) {
         </div>
       </div>
       <div class="form-row">
-        <label class="field-label" id="f-file-label">File (.3mf)</label>
+        <label class="field-label" id="f-file-label">File</label>
         <input type="file" id="f-file" onchange="onFileChosen()" />
         <div class="file-drop" id="file-drop-hint">No file selected yet</div>
       </div>
@@ -473,26 +490,31 @@ function renderSubmit(main) {
   onJobTypeChange();
 }
 
-function selectPath(key) {
-  state.submitPath = key;
-  renderSubmit(document.getElementById("main"));
-}
-
 function onJobTypeChange() {
   const jobType = document.getElementById("f-jobtype").value;
   state.submitJobType = jobType;
   const fileInput = document.getElementById("f-file");
   const fileLabel = document.getElementById("f-file-label");
   const materialLabel = document.getElementById("f-material-label");
+
   if (jobType === "print") {
-    fileInput.accept = ".3mf,.stl";
-    fileLabel.textContent = "File (.3mf preferred, .stl accepted)";
     materialLabel.textContent = "Material";
+    if (state.submitPath === "solo") {
+      fileInput.accept = ".3mf";
+      fileLabel.textContent = "File (sliced .3mf required)";
+    } else {
+      fileInput.accept = ".stl";
+      fileLabel.textContent = "File (raw .stl required)";
+    }
   } else {
     fileInput.accept = ".ai,.pdf";
-    fileLabel.textContent = "File (.ai)";
+    fileLabel.textContent = "File (.ai or .pdf)";
     materialLabel.textContent = "Material (e.g. 1/8in acrylic, plywood)";
   }
+}
+function selectPath(key) {
+  state.submitPath = key;
+  renderSubmit(document.getElementById("main"));
 }
 
 function onFileChosen() {

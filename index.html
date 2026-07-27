@@ -50,6 +50,15 @@
   .account-role { font-size: 11px; color: #7E8AA0; }
   .account-row button { margin-left: auto; background: none; border: none; display: flex; }
 
+  .preview-wrap { padding: 0 12px 8px; position: relative; }
+  .preview-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; border: none; background: #FFFFFF08; color: #9AA6BB; font-size: 12px; }
+  .preview-btn b { color: var(--gold); font-weight: 500; }
+  .preview-menu { display: none; position: absolute; bottom: 44px; left: 12px; right: 12px; border-radius: 8px; overflow: hidden; background: var(--navy-deep); border: 1px solid #FFFFFF14; z-index: 20; }
+  .preview-menu.open { display: block; }
+  .preview-menu button { width: 100%; text-align: left; padding: 8px 12px; font-size: 12px; border: none; background: transparent; color: #C7CEDA; }
+  .preview-menu button.current { color: var(--gold); }
+  .preview-menu button:hover { background: #FFFFFF08; }
+
   #main { flex: 1; overflow-y: auto; padding: 32px; }
   .page-eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; color: var(--slate-light); margin-bottom: 4px; }
   .page-title { font-size: 24px; font-weight: 600; margin: 0 0 24px; }
@@ -118,6 +127,7 @@
       </div>
     </div>
     <nav id="nav-list"></nav>
+    <div class="preview-wrap" id="preview-wrap"></div>
     <div class="account-row">
       <div class="account-avatar" id="account-avatar"></div>
       <div>
@@ -152,10 +162,10 @@ const firebaseConfig = {
 };
 
 // TODO: replace with your real district Workspace domain, e.g. "millcreekschools.org"
-const SCHOOL_DOMAIN = "https://millcreekhs.gcpsk12.org/";
+const SCHOOL_DOMAIN = "REPLACE_WITH_YOUR_SCHOOL_DOMAIN";
 
 // TODO: replace with your real Apps Script /exec deployment URL (Execute as: Me)
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw6kKA3usKAwOvm2-DRr3xBMGd-2otkvJyKSmZXmqLGUMwgFv-_2ztACUsLUcJOIrHh9g/exec";
+const APPS_SCRIPT_URL = "REPLACE_WITH_YOUR_APPS_SCRIPT_EXEC_URL";
 
 /* =========================================================
    INIT
@@ -165,8 +175,10 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let currentUser = null;
-let currentRole = "student"; // resolved from Firestore users/{uid} after sign-in
-let state = { page: "home", submitPath: null, submitJobType: null, submitFile: null };
+let currentRole = "student";        // the REAL role, from Firestore users/{email}
+let currentStudentNumber = null;     // real roster ID if imported, else falls back to email
+let previewRole = null;              // teacher-only "view as" override, does not change real permissions
+let state = { page: "home", submitPath: null, submitJobType: null, submitFile: null, previewMenuOpen: false };
 
 const NAV = {
   student: [
@@ -230,26 +242,36 @@ auth.onAuthStateChanged(async (user) => {
 
   currentUser = user;
 
-  // Look up (or create) this user's role record.
-  const userDocRef = db.collection("users").doc(user.uid);
+  // Users are keyed by EMAIL, not Firebase's internal uid. This is deliberate:
+  // email is known in advance (from the roster sheet import), a random uid
+  // generated at first sign-in is not — so keying by email is what lets a
+  // roster import "pre-provision" a student before they've ever signed in,
+  // and it's also what lets Firestore security rules look someone's role up
+  // directly (rules can only do direct-path lookups, not searches).
+  const userDocRef = db.collection("users").doc(user.email);
   const userDoc = await userDocRef.get();
   if (userDoc.exists) {
-    currentRole = userDoc.data().role || "student";
+    const d = userDoc.data();
+    currentRole = d.role || "student";
+    currentStudentNumber = d.studentNumber || user.email;
   } else {
-    // First time we've seen this account — default to student.
-    // Promote to peer_leader/teacher manually in the Firestore console for now;
-    // roster import (Phase 5) will handle this properly.
+    // No roster record yet for this email — auto-create a student placeholder.
+    // If a roster import runs later (or already ran under a slightly different
+    // email), it will overwrite this doc's fields, including studentNumber.
     await userDocRef.set({
       name: user.displayName || "",
       email: user.email,
       role: "student",
+      studentNumber: user.email, // placeholder until roster import sets the real ID
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     });
     currentRole = "student";
+    currentStudentNumber = user.email;
   }
 
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("app-screen").classList.add("visible");
+  previewRole = null;
   state.page = NAV[currentRole][0].key;
   renderShell();
 });
@@ -257,8 +279,12 @@ auth.onAuthStateChanged(async (user) => {
 /* =========================================================
    SHELL RENDER (sidebar + account)
 ========================================================= */
+function effectiveRole() {
+  return previewRole || currentRole;
+}
+
 function renderShell() {
-  const nav = NAV[currentRole];
+  const nav = NAV[effectiveRole()];
   document.getElementById("nav-list").innerHTML = nav.map(item => {
     const active = state.page === item.key;
     const disabledClass = item.enabled ? "" : "disabled";
@@ -267,13 +293,49 @@ function renderShell() {
   }).join("");
 
   document.getElementById("account-name").textContent = currentUser.displayName || currentUser.email;
-  document.getElementById("account-role").textContent = ROLE_LABEL[currentRole];
+  document.getElementById("account-role").textContent =
+    previewRole ? `${ROLE_LABEL[currentRole]} · previewing ${ROLE_LABEL[previewRole]}` : ROLE_LABEL[currentRole];
   const avatarEl = document.getElementById("account-avatar");
   avatarEl.innerHTML = currentUser.photoURL
     ? `<img src="${currentUser.photoURL}" />`
     : (currentUser.displayName || currentUser.email)[0].toUpperCase();
 
+  renderPreviewToggle();
   renderMain();
+}
+
+// Only real teachers get the "preview as" switcher — it changes what UI
+// renders, not what Firestore will actually let you read/write. A teacher
+// previewing "Student" still has teacher-level Firestore permissions under
+// the hood, so this is for showing students their screen / UI troubleshooting,
+// not a true permissions simulator.
+function renderPreviewToggle() {
+  const wrap = document.getElementById("preview-wrap");
+  if (currentRole !== "teacher") {
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.innerHTML = `
+    <button class="preview-btn" onclick="togglePreviewMenu()">
+      <span>Preview as: <b>${ROLE_LABEL[effectiveRole()]}</b></span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="preview-menu ${state.previewMenuOpen ? "open" : ""}" id="preview-menu">
+      ${Object.keys(NAV).map(r => `<button class="${r === effectiveRole() ? "current" : ""}" onclick="setPreviewRole('${r}')">${ROLE_LABEL[r]}</button>`).join("")}
+    </div>
+  `;
+}
+
+function togglePreviewMenu() {
+  state.previewMenuOpen = !state.previewMenuOpen;
+  renderPreviewToggle();
+}
+
+function setPreviewRole(r) {
+  previewRole = (r === currentRole) ? null : r;
+  state.previewMenuOpen = false;
+  state.page = NAV[effectiveRole()][0].key;
+  renderShell();
 }
 
 function setPage(key) {
@@ -303,7 +365,7 @@ async function renderHome(main) {
   `;
 
   const snap = await db.collection("submissions")
-    .where("studentNumber", "==", currentUser.uid)
+    .where("studentNumber", "==", currentStudentNumber)
     .orderBy("createdAt", "desc")
     .get();
 
@@ -456,7 +518,7 @@ async function submitJob() {
   try {
     // 1. Create the parent submission doc.
     const submissionRef = await db.collection("submissions").add({
-      studentNumber: currentUser.uid,
+      studentNumber: currentStudentNumber,
       label,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       overallStatus: "Submitted",
@@ -474,7 +536,7 @@ async function submitJob() {
       statusHistory: [{
         status: "Submitted",
         timestamp: new Date().toISOString(),
-        actor: currentUser.uid,
+        actor: currentUser.email,
         note: state.submitPath === "assisted" ? "Peer-leader slicing requested" : null,
       }],
       currentAssignee: null,

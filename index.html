@@ -167,8 +167,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 
 <script>
+
 /* =========================================================
-   CONFIG — UPDATED WITH YOUR LIVE URLS
+   CONFIG — UPDATED WITH MULTI-DOMAIN SUPPORT & LIVE URLS
 ========================================================= */
 const firebaseConfig = {
   apiKey: "AIzaSyAu-wxO-5Jr1jQvAH-gL6aYdoZD3yyNuKQ",
@@ -180,7 +181,8 @@ const firebaseConfig = {
   measurementId: "G-7055KGRPZD"
 };
 
-const SCHOOL_DOMAIN = "gcpsk12.org";
+// Accept both staff (@gcpsk12.org) and student (@g.gcpsk12.org) accounts
+const ALLOWED_DOMAINS = ["gcpsk12.org", "g.gcpsk12.org"];
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw6kKA3usKAwOvm2-DRr3xBMGd-2otkvJyKSmZXmqLGUMwgFv-_2ztACUsLUcJOIrHh9g/exec";
 
 /* =========================================================
@@ -224,9 +226,6 @@ document.getElementById("google-signin-btn").addEventListener("click", signIn);
 
 function signIn() {
   const provider = new firebase.auth.GoogleAuthProvider();
-  if (SCHOOL_DOMAIN && SCHOOL_DOMAIN !== "REPLACE_WITH_YOUR_SCHOOL_DOMAIN") {
-    provider.setCustomParameters({ hd: SCHOOL_DOMAIN });
-  }
   auth.signInWithPopup(provider).catch(err => showLoginError("Sign-in failed: " + err.message));
 }
 
@@ -248,9 +247,12 @@ auth.onAuthStateChanged(async (user) => {
     return;
   }
 
-  if (SCHOOL_DOMAIN && SCHOOL_DOMAIN !== "REPLACE_WITH_YOUR_SCHOOL_DOMAIN" &&
-      !user.email.endsWith("@" + SCHOOL_DOMAIN)) {
-    showLoginError("Please sign in with your school (" + SCHOOL_DOMAIN + ") account.");
+  // Multi-domain validation check
+  const emailDomain = user.email.split("@")[1]?.toLowerCase();
+  const isAllowedDomain = ALLOWED_DOMAINS.includes(emailDomain);
+
+  if (!isAllowedDomain) {
+    showLoginError("Please sign in with a valid school account (@gcpsk12.org or @g.gcpsk12.org).");
     auth.signOut();
     return;
   }
@@ -275,7 +277,7 @@ auth.onAuthStateChanged(async (user) => {
   state.page = NAV[currentRole][0].key;
   renderShell();
 });
-
+  
 /* =========================================================
    SHELL RENDER (sidebar + account)
 ========================================================= */

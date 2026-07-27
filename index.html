@@ -285,10 +285,18 @@ async function signInWithStudentNumber(event) {
       await auth.signInAnonymously();
     }
 
-    const userDocRef = db.collection("users").doc(sNum);
-    const userDoc = await userDocRef.get();
+    // Roster docs might be keyed by doc ID = student number, OR keyed by
+    // email with a studentNumber field inside — support both.
+    let userDoc = null;
+    const directDoc = await db.collection("users").doc(sNum).get();
+    if (directDoc.exists) {
+      userDoc = directDoc;
+    } else {
+      const querySnap = await db.collection("users").where("studentNumber", "==", sNum).limit(1).get();
+      if (!querySnap.empty) userDoc = querySnap.docs[0];
+    }
 
-    if (!userDoc.exists) {
+    if (!userDoc) {
       showLoginError("Student ID not found on roster. Please check with your teacher.");
       btn.disabled = false;
       btn.textContent = "Continue";

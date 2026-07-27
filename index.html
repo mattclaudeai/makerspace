@@ -120,6 +120,12 @@
   .flag-form-label { font-size: 11px; font-weight: 600; color: var(--slate); margin-bottom: 4px; }
   .flag-radio { display: block; font-size: 12px; color: var(--ink); margin-bottom: 4px; }
   .flag-form textarea { width: 100%; font-family: 'Inter'; font-size: 12px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; margin-top: 4px; resize: vertical; }
+
+  .row-thumb { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; background: #EEEBE2; flex-shrink: 0; }
+  .row-thumb-fallback { width: 44px; height: 44px; border-radius: 8px; background: #EEEBE2; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: var(--slate-light); text-transform: uppercase; }
+  .row-with-thumb { display: flex; align-items: center; gap: 14px; }
+  .queue-thumb { width: 100%; height: 90px; object-fit: cover; border-radius: 6px; background: #EEEBE2; margin-bottom: 8px; display: block; }
+  .queue-thumb-fallback { width: 100%; height: 48px; border-radius: 6px; background: #EEEBE2; margin-bottom: 8px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--slate-light); text-transform: uppercase; }
 </style>
 </head>
 <body>
@@ -182,6 +188,12 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 
+<!-- Thumbnail generation libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+
 <script>
 /* =========================================================
    CONFIG
@@ -204,6 +216,10 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw6kKA3usKAwOvm
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
+
+if (typeof pdfjsLib !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+}
 
 let currentUser = null;
 let currentRole = "student";        
@@ -466,15 +482,33 @@ async function renderHome(main) {
     const tone = flagged ? "cardinal" : (complete === total && total > 0) ? "gold" : "neutral";
     const statusLabel = flagged ? "Flagged — see part detail" : `${complete} of ${total} parts complete`;
 
+    const firstPart = partsSnap.docs[0]?.data();
+    const thumbHtml = renderThumbBox(firstPart, "row");
+
     rowsHtml.push(`<div class="list-row">
-      <div>
-        <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
-        <div class="row-sub">${statusLabel}</div>
+      <div class="row-with-thumb">
+        ${thumbHtml}
+        <div>
+          <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
+          <div class="row-sub">${statusLabel}</div>
+        </div>
       </div>
       <span class="pill ${tone}">${escapeHtml(sub.overallStatus || "Submitted")}</span>
     </div>`);
   }
   document.getElementById("submissions-list").innerHTML = rowsHtml.join("");
+}
+
+// Shared thumbnail renderer for both the student dashboard row and queue cards.
+// `size` is "row" (44px) or "card" (wider queue-card thumbnail).
+function renderThumbBox(part, size) {
+  const jobLabel = part && part.jobType === "laser" ? "Laser" : "Print";
+  if (part && part.thumbnailDataUrl) {
+    const cls = size === "row" ? "row-thumb" : "queue-thumb";
+    return `<img class="${cls}" src="${part.thumbnailDataUrl}" alt="Preview" />`;
+  }
+  const cls = size === "row" ? "row-thumb-fallback" : "queue-thumb-fallback";
+  return `<div class="${cls}">${jobLabel}</div>`;
 }
 
 /* =========================================================
@@ -599,6 +633,144 @@ function onFileChosen() {
   }
 }
 
+/* =========================================================
+   THUMBNAIL GENERATION (client-side, best-effort)
+   Never blocks a submission — any failure just falls back to no thumbnail.
+========================================================= */
+const THUMB_MAX_DIM = 240;
+const STL_THUMB_SIZE_LIMIT_BYTES = 60 * 1024 * 1024; // skip STL rendering above this to avoid freezing slower devices
+const THUMB_TIMEOUT_MS = 15000;
+
+async function generateThumbnail(file, jobType) {
+  try {
+    const withTimeout = (promise) => Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve(null), THUMB_TIMEOUT_MS)),
+    ]);
+
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".3mf")) return await withTimeout(thumbnailFrom3mf(file));
+    if (name.endsWith(".pdf") || name.endsWith(".ai")) return await withTimeout(thumbnailFromPdf(file));
+    if (name.endsWith(".stl")) {
+      if (file.size > STL_THUMB_SIZE_LIMIT_BYTES) return null; // too big to safely render client-side
+      return await withTimeout(thumbnailFromStl(file));
+    }
+    return null;
+  } catch (err) {
+    console.warn("Thumbnail generation skipped:", err);
+    return null;
+  }
+}
+
+function resizeToThumbnail(imgSource, srcW, srcH) {
+  const scale = Math.min(THUMB_MAX_DIM / srcW, THUMB_MAX_DIM / srcH, 1);
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(imgSource, 0, 0, w, h);
+  return canvas.toDataURL("image/jpeg", 0.75);
+}
+
+// .3mf is secretly a ZIP file; Bambu Studio embeds a plate thumbnail PNG inside it —
+// no rendering required, just extract the largest embedded PNG.
+async function thumbnailFrom3mf(file) {
+  if (typeof JSZip === "undefined") return null;
+  const buf = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
+  const pngEntries = zip.file(/\.png$/i);
+  if (!pngEntries || pngEntries.length === 0) return null;
+
+  let bestBlob = null;
+  let bestSize = -1;
+  for (const entry of pngEntries) {
+    const blob = await entry.async("blob");
+    if (blob.size > bestSize) { bestSize = blob.size; bestBlob = blob; }
+  }
+  if (!bestBlob) return null;
+
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(bestBlob);
+    img.onload = () => {
+      try {
+        const dataUrl = resizeToThumbnail(img, img.naturalWidth, img.naturalHeight);
+        URL.revokeObjectURL(url);
+        resolve(dataUrl);
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't decode embedded thumbnail")); };
+    img.src = url;
+  });
+}
+
+// Laser files: .pdf directly, or .ai saved with "Create PDF Compatible File" (Illustrator's
+// default), which makes the .ai valid PDF under the hood. Renders page 1 to a canvas.
+async function thumbnailFromPdf(file) {
+  if (typeof pdfjsLib === "undefined") return null;
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const page = await pdf.getPage(1);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = THUMB_MAX_DIM / Math.max(baseViewport.width, baseViewport.height);
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas.toDataURL("image/jpeg", 0.75);
+}
+
+// Raw .stl has no embedded image — load the mesh into a throwaway Three.js scene,
+// auto-frame a camera around it, and snapshot a single render.
+async function thumbnailFromStl(file) {
+  if (typeof THREE === "undefined" || typeof THREE.STLLoader === "undefined") return null;
+  const buf = await file.arrayBuffer();
+  const loader = new THREE.STLLoader();
+  const geometry = loader.parse(buf);
+  geometry.computeBoundingSphere();
+  geometry.computeVertexNormals();
+
+  const size = THUMB_MAX_DIM;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+  try {
+    renderer.setSize(size, size);
+    renderer.setClearColor(0xF7F5F0, 1);
+
+    const scene = new THREE.Scene();
+    const material = new THREE.MeshNormalMaterial(); // needs no lights, always renders visibly
+    const mesh = new THREE.Mesh(geometry, material);
+
+    const sphere = geometry.boundingSphere;
+    const center = sphere ? sphere.center : new THREE.Vector3(0, 0, 0);
+    const radius = (sphere && sphere.radius) ? sphere.radius : 1;
+
+    mesh.position.set(-center.x, -center.y, -center.z);
+    scene.add(mesh);
+
+    const camera = new THREE.PerspectiveCamera(35, 1, Math.max(radius * 0.01, 0.001), radius * 20);
+    const dist = radius * 2.6;
+    camera.position.set(dist, dist * 0.8, dist);
+    camera.lookAt(0, 0, 0);
+
+    renderer.render(scene, camera);
+    const dataUrl = renderer.domElement.toDataURL("image/jpeg", 0.8);
+
+    material.dispose();
+    return dataUrl;
+  } finally {
+    geometry.dispose();
+    renderer.dispose();
+  }
+}
+
 function setSubmitStatus(kind, text) {
   const el = document.getElementById("submit-status");
   el.className = "status-msg " + kind;
@@ -645,6 +817,10 @@ async function submitJob() {
       overallStatus: "Submitted",
     });
 
+    setSubmitStatus("pending", "Generating preview…");
+    const thumbnailDataUrl = await generateThumbnail(state.submitFile, jobType);
+
+    setSubmitStatus("pending", "Creating submission…");
     const partRef = await db.collection("parts").add({
       submissionId: submissionRef.id,
       jobType,
@@ -662,6 +838,7 @@ async function submitJob() {
       currentAssignee: null,
       handoffNote: null,
       fileRef: null,
+      thumbnailDataUrl: thumbnailDataUrl || null,
     });
 
     setSubmitStatus("pending", "Uploading file…");
@@ -842,6 +1019,7 @@ function renderQueueCard(part, submission) {
   const jobIcon = part.jobType === "laser" ? "Laser" : "Print";
 
   return `<div class="queue-card">
+    ${renderThumbBox(part, "card")}
     <div class="queue-card-title">${escapeHtml(label)}</div>
     <div class="row-sub mono">${jobIcon} · qty ${part.quantity || 1}${part.material ? " · " + escapeHtml(part.material) : ""}</div>
     ${flagged ? `<div class="flag-note">Flagged — ${escapeHtml(part.failureReason)}${part.flagMessage ? ": " + escapeHtml(part.flagMessage) : ""}</div>` : ""}

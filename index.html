@@ -483,19 +483,20 @@ function onJobTypeChange() {
   const fileInput = document.getElementById("f-file");
   const fileLabel = document.getElementById("f-file-label");
   const materialLabel = document.getElementById("f-material-label");
+  
+  // Clear file input on job type change to prevent submitting wrong type
+  fileInput.value = "";
+  state.submitFile = null;
+  document.getElementById("file-drop-hint").textContent = "No file selected yet";
+  document.getElementById("file-drop-hint").classList.remove("has-file");
 
   if (jobType === "print") {
-    materialLabel.textContent = "Material";
-    if (state.submitPath === "solo") {
-      fileInput.accept = ".3mf";
-      fileLabel.textContent = "File (sliced .3mf required)";
-    } else {
-      fileInput.accept = ".stl";
-      fileLabel.textContent = "File (raw .stl required)";
-    }
+    fileInput.accept = ".3mf,.stl";
+    fileLabel.textContent = "File (.3mf preferred, .stl accepted)";
+    materialLabel.textContent = "Material (e.g. PLA, TPU)";
   } else {
     fileInput.accept = ".ai,.pdf";
-    fileLabel.textContent = "File (.ai or .pdf)";
+    fileLabel.textContent = "File (.ai preferred, .pdf accepted)";
     materialLabel.textContent = "Material (e.g. 1/8in acrylic, plywood)";
   }
 }
@@ -523,17 +524,58 @@ function setSubmitStatus(kind, text) {
 async function submitJob() {
   const label = document.getElementById("f-label").value.trim();
   const jobType = document.getElementById("f-jobtype").value;
-  const quantity = parseInt(document.getElementById("f-quantity").value, 10) || 1;
+  const quantity = parseInt(document.getElementById("f-quantity").value, 10);
   const material = document.getElementById("f-material").value.trim();
   const color = document.getElementById("f-color").value.trim();
 
-  if (!label) { setSubmitStatus("error", "Give this submission a label first."); return; }
-  if (!state.submitFile) { setSubmitStatus("error", "Choose a file to upload."); return; }
+  // --- 1. TEXT BOX VALIDATION ---
+  if (!label) { 
+    setSubmitStatus("error", "Please provide a Submission Label."); 
+    return; 
+  }
+  if (!material) { 
+    setSubmitStatus("error", "Please specify a Material (e.g., PLA, Acrylic)."); 
+    return; 
+  }
+  if (!color) { 
+    setSubmitStatus("error", "Please specify a Color."); 
+    return; 
+  }
+  if (isNaN(quantity) || quantity < 1) { 
+    setSubmitStatus("error", "Quantity must be at least 1."); 
+    return; 
+  }
 
+  // --- 2. FILE SELECTION & EXTENSION VALIDATION ---
+  if (!state.submitFile) { 
+    setSubmitStatus("error", "Please choose a file to upload."); 
+    return; 
+  }
+
+  const fileName = state.submitFile.name.toLowerCase();
+  const allowedPrintExts = ['.3mf', '.stl'];
+  const allowedLaserExts = ['.ai', '.pdf'];
+  
+  if (jobType === "print") {
+    const isValidPrint = allowedPrintExts.some(ext => fileName.endsWith(ext));
+    if (!isValidPrint) {
+      setSubmitStatus("error", "Invalid file format for 3D Prints. Please upload a .3mf or .stl file.");
+      return;
+    }
+  } else if (jobType === "laser") {
+    const isValidLaser = allowedLaserExts.some(ext => fileName.endsWith(ext));
+    if (!isValidLaser) {
+      setSubmitStatus("error", "Invalid file format for Laser Cutting. Please upload an .ai or .pdf file.");
+      return;
+    }
+  }
+
+  // --- 3. SUBMISSION PROCESS ---
   document.getElementById("submit-btn").disabled = true;
   setSubmitStatus("pending", "Creating submission…");
 
   try {
+    // Create the parent submission doc
     const submissionRef = await db.collection("submissions").add({
       studentNumber: currentStudentNumber,
       label,
@@ -541,6 +583,7 @@ async function submitJob() {
       overallStatus: "Submitted",
     });
 
+    // Create the part doc
     const partRef = await db.collection("parts").add({
       submissionId: submissionRef.id,
       jobType,
@@ -560,9 +603,11 @@ async function submitJob() {
       fileRef: null,
     });
 
+    // Upload the file via Apps Script
     setSubmitStatus("pending", "Uploading file…");
     const fileUrl = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
 
+    // Store the resulting Drive link back on the part doc
     await db.collection("parts").doc(partRef.id).update({ fileRef: fileUrl });
 
     setSubmitStatus("success", "Submitted! Head to your dashboard to track it.");

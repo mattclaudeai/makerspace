@@ -223,7 +223,7 @@ const NAV = {
     { key: "printers", label: "Printer Status", enabled: false },
   ],
   teacher: [
-    { key: "overview", label: "Overview", enabled: false },
+    { key: "overview", label: "Overview", enabled: true },
     { key: "reports", label: "Reports", enabled: false },
     { key: "fleet", label: "Printer Fleet", enabled: false },
     { key: "roster", label: "Roster", enabled: false },
@@ -419,6 +419,7 @@ function renderMain() {
   if (state.page === "home") return renderHome(main);
   if (state.page === "submit") return renderSubmit(main);
   if (state.page === "queue") return renderQueue(main);
+  if (state.page === "overview") return renderOverview(main);
   main.innerHTML = `<div class="empty-hint">This page isn't built yet.</div>`;
 }
 
@@ -707,6 +708,71 @@ function uploadFileViaAppsScript(file, submissionId, partId) {
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* =========================================================
+   OVERVIEW (TEACHER)
+========================================================= */
+function renderOverview(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Teacher / Admin</div>
+    <h1 class="page-title">Overview</h1>
+
+    <div class="card form-section">
+      <h3 style="margin-top:0;">Drive storage used</h3>
+      <p class="row-sub" style="margin-bottom:14px;">
+        Totals every file inside the "Mill Creek Fab Lab Submissions" folder — the same folder
+        every student upload lands in. Checked on demand, not automatically, since it walks
+        every submission folder in Drive.
+      </p>
+      <button class="secondary-btn" id="storage-check-btn" onclick="checkStorageUsage()">Check storage used</button>
+      <div id="storage-result" style="margin-top:16px;"></div>
+    </div>
+  `;
+}
+
+async function checkStorageUsage() {
+  const btn = document.getElementById("storage-check-btn");
+  const resultEl = document.getElementById("storage-result");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  resultEl.innerHTML = `<div class="empty-hint">Scanning submission folders — this can take a moment if there are a lot of files…</div>`;
+
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "getStorageUsage" }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Unknown error");
+
+    const usedLabel = formatBytes(data.totalBytes);
+    const pct = ((data.totalBytes / (15 * 1024 * 1024 * 1024)) * 100).toFixed(1);
+
+    resultEl.innerHTML = `
+      <div class="list-row" style="padding:0 0 12px;">
+        <div>
+          <div class="row-title">${usedLabel} used</div>
+          <div class="row-sub">${data.fileCount} file${data.fileCount === 1 ? "" : "s"} across ${data.submissionFolderCount} submission folder${data.submissionFolderCount === 1 ? "" : "s"}</div>
+        </div>
+        <span class="pill gold">${pct}% of 15 GB</span>
+      </div>
+      <a href="${data.rootFolderUrl}" target="_blank" rel="noopener" class="row-sub" style="text-decoration:underline;">Open the submissions folder in Drive →</a>
+    `;
+  } catch (err) {
+    resultEl.innerHTML = `<div class="empty-hint">Couldn't check storage: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Check storage used";
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1024) return mb.toFixed(1) + " MB";
+  return (mb / 1024).toFixed(2) + " GB";
 }
 
 /* =========================================================

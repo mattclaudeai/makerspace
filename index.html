@@ -6,6 +6,10 @@
 <title>Mill Creek Engineering — Fab Lab Queue</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Three.js & STLLoader for STL In-Browser Viewer -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+
 <style>
   :root {
     --cardinal: #8B2331; --navy: #0C223F; --navy-deep: #081627;
@@ -26,13 +30,9 @@
   .brand-mark { width: 32px; height: 32px; border-radius: 8px; background: var(--cardinal); display: flex; align-items: center; justify-content: center; color: var(--gold); font-weight: 700; font-size: 15px; flex-shrink: 0; }
   .brand-eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; color: var(--slate-light); }
   .login-title { font-size: 20px; font-weight: 600; margin: 16px 0 4px; }
-  .login-sub { font-size: 14px; color: var(--slate); margin: 0 0 20px; }
-  
-  .input-group { margin-bottom: 12px; }
-  .input-group label { display: block; font-size: 12px; font-weight: 600; color: var(--slate); margin-bottom: 4px; }
-  .input-group input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: 'Inter'; }
-  .input-group input:focus { outline: none; border-color: var(--navy); }
-
+  .login-sub { font-size: 14px; color: var(--slate); margin: 0 0 24px; }
+  .google-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: white; font-size: 14px; font-weight: 500; color: var(--ink); }
+  .google-btn:hover { background: #FAFAF9; }
   .login-footnote { font-size: 11px; text-align: center; margin-top: 16px; color: var(--slate-light); }
   .login-error { font-size: 12px; color: var(--cardinal); background: #8B233114; border: 1px solid var(--cardinal); border-radius: 8px; padding: 10px 12px; margin-top: 14px; display: none; }
 
@@ -49,9 +49,10 @@
   .nav-item.disabled { opacity: 0.4; cursor: default; }
   .account-row { display: flex; align-items: center; gap: 10px; padding: 16px; border-top: 1px solid #FFFFFF14; }
   .account-avatar { width: 32px; height: 32px; border-radius: 999px; background: var(--gold); color: var(--navy); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; overflow: hidden; }
+  .account-avatar img { width: 100%; height: 100%; object-fit: cover; }
   .account-name { font-size: 12px; font-weight: 500; color: var(--cream); }
   .account-role { font-size: 11px; color: #7E8AA0; }
-  .account-row button { margin-left: auto; background: none; border: none; display: flex; cursor: pointer; }
+  .account-row button { margin-left: auto; background: none; border: none; display: flex; }
 
   .preview-wrap { padding: 0 12px 8px; position: relative; }
   .preview-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; border: none; background: #FFFFFF08; color: #9AA6BB; font-size: 12px; }
@@ -91,7 +92,7 @@
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .file-drop { border: 1.5px dashed var(--border); border-radius: 10px; padding: 20px; text-align: center; font-size: 13px; color: var(--slate); margin-top: 8px; }
   .file-drop.has-file { border-color: var(--gold-deep); color: var(--ink); }
-  .primary-btn { background: var(--navy); color: white; border: none; padding: 11px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; width: 100%; cursor: pointer; }
+  .primary-btn { background: var(--navy); color: white; border: none; padding: 11px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; }
   .primary-btn:hover { background: #16305c; }
   .primary-btn:disabled { opacity: 0.5; cursor: default; }
   .status-msg { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-top: 14px; display: none; }
@@ -99,7 +100,7 @@
   .status-msg.success { background: rgba(199,182,131,0.13); color: var(--gold-deep); display: block; }
   .status-msg.error { background: #8B233114; color: var(--cardinal); display: block; }
 
-  .secondary-btn { background: transparent; color: var(--slate); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .secondary-btn { background: transparent; color: var(--slate); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; }
   .secondary-btn:hover { background: #EFEDE5; }
 
   .queue-cols { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; align-items: start; }
@@ -109,7 +110,7 @@
   .queue-card { font-size: 12px; padding: 10px; border-radius: 8px; background: var(--paper); border: 1px solid var(--border); line-height: 1.4; margin-bottom: 10px; }
   .queue-card-title { font-size: 13px; font-weight: 500; color: var(--ink); margin-bottom: 4px; }
   .queue-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .mini-btn { font-size: 11px; font-weight: 600; padding: 5px 9px; border-radius: 6px; border: none; background: var(--navy); color: white; cursor: pointer; }
+  .mini-btn { font-size: 11px; font-weight: 600; padding: 5px 9px; border-radius: 6px; border: none; background: var(--navy); color: white; }
   .mini-btn.danger { background: var(--cardinal); }
   .mini-btn.plain { background: #EEEBE2; color: var(--slate); }
   .flag-note { background: rgba(139,35,49,0.08); color: var(--cardinal); padding: 6px 8px; border-radius: 6px; font-size: 11px; margin: 6px 0; }
@@ -117,6 +118,15 @@
   .flag-form-label { font-size: 11px; font-weight: 600; color: var(--slate); margin-bottom: 4px; }
   .flag-radio { display: block; font-size: 12px; color: var(--ink); margin-bottom: 4px; }
   .flag-form textarea { width: 100%; font-family: 'Inter'; font-size: 12px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; margin-top: 4px; resize: vertical; }
+
+  /* 3D STL Viewer Modal */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(8, 22, 39, 0.75); z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal-box { background: var(--paper); border-radius: 12px; width: 640px; max-width: 90vw; padding: 20px; position: relative; }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .modal-title { font-size: 16px; font-weight: 600; margin: 0; }
+  .modal-close { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--slate); }
+  #stl-canvas-container { width: 100%; height: 360px; background: #1b2230; border-radius: 8px; overflow: hidden; }
 </style>
 </head>
 <body>
@@ -129,20 +139,13 @@
       <span class="brand-eyebrow">Mill Creek Engineering</span>
     </div>
     <h1 class="login-title">Print &amp; laser queue</h1>
-    <p class="login-sub">Enter your Student ID and PIN to log in.</p>
-    
-    <div class="input-group">
-      <label for="login-student-id">Student ID</label>
-      <input type="text" id="login-student-id" placeholder="e.g. 200123456" autocomplete="username" />
-    </div>
-    <div class="input-group">
-      <label for="login-pin">PIN Code</label>
-      <input type="password" id="login-pin" placeholder="Enter PIN" autocomplete="current-password" />
-    </div>
-
-    <button class="primary-btn" id="login-btn" onclick="signInWithPin()">Sign In</button>
+    <p class="login-sub">Sign in with your school Google account to submit or manage jobs.</p>
+    <button class="google-btn" id="google-signin-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.52 12.27c0-.85-.08-1.67-.22-2.45H12v4.63h6.47c-.28 1.5-1.13 2.78-2.4 3.63v3.02h3.89c2.28-2.1 3.56-5.19 3.56-8.83z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.95-2.9l-3.89-3.02c-1.08.73-2.46 1.16-4.06 1.16-3.12 0-5.77-2.1-6.71-4.93H1.27v3.1C3.25 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.29 14.31c-.24-.73-.38-1.5-.38-2.31s.14-1.58.38-2.31V6.59H1.27C.46 8.23 0 10.06 0 12s.46 3.77 1.27 5.41l4.02-3.1z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.79l3.44-3.44C17.95 1.19 15.24 0 12 0 7.31 0 3.25 2.7 1.27 6.59l4.02 3.1C6.23 6.86 8.88 4.77 12 4.77z"/></svg>
+      Continue with Google
+    </button>
     <div class="login-error" id="login-error"></div>
-    <p class="login-footnote">Contact your teacher if you forgot your credentials</p>
+    <p class="login-footnote">Restricted to district Workspace accounts</p>
   </div>
 </div>
 
@@ -171,13 +174,25 @@
   <main id="main"></main>
 </div>
 
-<!-- Firebase Compat Libraries -->
+<!-- Modal Viewer for STLs -->
+<div class="modal-overlay" id="stl-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 class="modal-title" id="stl-modal-title">3D Preview</h3>
+      <button class="modal-close" onclick="closeStlModal()">&times;</button>
+    </div>
+    <div id="stl-canvas-container"></div>
+  </div>
+</div>
+
+<!-- Firebase (compat SDK — no build step needed) -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 
 <script>
 /* =========================================================
-   CONFIG
+   CONFIG — replace with your actual values
 ========================================================= */
 const firebaseConfig = {
   apiKey: "AIzaSyAu-wxO-5Jr1jQvAH-gL6aYdoZD3yyNuKQ",
@@ -189,12 +204,14 @@ const firebaseConfig = {
   measurementId: "G-7055KGRPZD"
 };
 
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw6kKA3usKAwOvm2-DRr3xBMGd-2otkvJyKSmZXmqLGUMwgFv-_2ztACUsLUcJOIrHh9g/exec";
+const SCHOOL_DOMAIN = "REPLACE_WITH_YOUR_SCHOOL_DOMAIN";
+const APPS_SCRIPT_URL = "REPLACE_WITH_YOUR_APPS_SCRIPT_EXEC_URL";
 
 /* =========================================================
    INIT
 ========================================================= */
 firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
 const db = firebase.firestore();
 
 let currentUser = null;
@@ -225,71 +242,20 @@ const NAV = {
 const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "Teacher / Admin" };
 
 /* =========================================================
-   PIN AUTHENTICATION
+   AUTH
 ========================================================= */
-async function signInWithPin() {
-  const studentId = document.getElementById("login-student-id").value.trim();
-  const pin = document.getElementById("login-pin").value.trim();
-  const loginBtn = document.getElementById("login-btn");
+document.getElementById("google-signin-btn").addEventListener("click", signIn);
 
-  if (!studentId || !pin) {
-    showLoginError("Please enter both your Student ID and PIN.");
-    return;
+function signIn() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  if (SCHOOL_DOMAIN && SCHOOL_DOMAIN !== "REPLACE_WITH_YOUR_SCHOOL_DOMAIN") {
+    provider.setCustomParameters({ hd: SCHOOL_DOMAIN });
   }
-
-  loginBtn.disabled = true;
-  hideLoginError();
-
-  try {
-    const userDocRef = db.collection("users").doc(studentId);
-    const userDoc = await userDocRef.get();
-
-    if (!userDoc.exists) {
-      showLoginError("Student ID not found in the Fab Lab roster. Ask your teacher to add you.");
-      loginBtn.disabled = false;
-      return;
-    }
-
-    const userData = userDoc.data();
-
-    // Verify PIN against stored document PIN
-    if (String(userData.pin) !== String(pin)) {
-      showLoginError("Incorrect PIN.");
-      loginBtn.disabled = false;
-      return;
-    }
-
-    // Successfully authenticated
-    currentUser = {
-      displayName: userData.name || `Student ${studentId}`,
-      email: userData.email || `${studentId}@gcpsk12.org`,
-      studentNumber: studentId
-    };
-
-    currentRole = userData.role || "student";
-    currentStudentNumber = studentId;
-
-    document.getElementById("login-screen").style.display = "none";
-    document.getElementById("app-screen").classList.add("visible");
-    previewRole = null;
-    state.page = NAV[currentRole][0].key;
-    renderShell();
-
-  } catch (err) {
-    showLoginError("Sign-in failed: " + err.message);
-  } finally {
-    loginBtn.disabled = false;
-  }
+  auth.signInWithPopup(provider).catch(err => showLoginError("Sign-in failed: " + err.message));
 }
 
 function signOutUser() {
-  currentUser = null;
-  currentStudentNumber = null;
-  document.getElementById("login-student-id").value = "";
-  document.getElementById("login-pin").value = "";
-  hideLoginError();
-  document.getElementById("app-screen").classList.remove("visible");
-  document.getElementById("login-screen").style.display = "flex";
+  auth.signOut();
 }
 
 function showLoginError(msg) {
@@ -298,13 +264,44 @@ function showLoginError(msg) {
   el.style.display = "block";
 }
 
-function hideLoginError() {
-  const el = document.getElementById("login-error");
-  el.style.display = "none";
-}
+auth.onAuthStateChanged(async (user) => {
+  if (!user) {
+    currentUser = null;
+    document.getElementById("app-screen").classList.remove("visible");
+    document.getElementById("login-screen").style.display = "flex";
+    return;
+  }
+
+  if (SCHOOL_DOMAIN && SCHOOL_DOMAIN !== "REPLACE_WITH_YOUR_SCHOOL_DOMAIN" &&
+      !user.email.endsWith("@" + SCHOOL_DOMAIN)) {
+    showLoginError("Please sign in with your school (" + SCHOOL_DOMAIN + ") account.");
+    auth.signOut();
+    return;
+  }
+
+  currentUser = user;
+  const userDocRef = db.collection("users").doc(user.email);
+  const userDoc = await userDocRef.get();
+
+  if (!userDoc.exists) {
+    showLoginError("This account isn't on the Fab Lab roster yet. Ask your teacher to add you.");
+    auth.signOut();
+    return;
+  }
+
+  const d = userDoc.data();
+  currentRole = d.role || "student";
+  currentStudentNumber = d.studentNumber || user.email;
+
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app-screen").classList.add("visible");
+  previewRole = null;
+  state.page = NAV[currentRole][0].key;
+  renderShell();
+});
 
 /* =========================================================
-   SHELL RENDER
+   SHELL RENDER (sidebar + account)
 ========================================================= */
 function effectiveRole() {
   return previewRole || currentRole;
@@ -319,12 +316,13 @@ function renderShell() {
       onclick="${item.enabled ? `setPage('${item.key}')` : ""}">${item.label}${item.enabled ? "" : " · soon"}</button>`;
   }).join("");
 
-  document.getElementById("account-name").textContent = currentUser.displayName;
+  document.getElementById("account-name").textContent = currentUser.displayName || currentUser.email;
   document.getElementById("account-role").textContent =
     previewRole ? `${ROLE_LABEL[currentRole]} · previewing ${ROLE_LABEL[previewRole]}` : ROLE_LABEL[currentRole];
-  
   const avatarEl = document.getElementById("account-avatar");
-  avatarEl.textContent = (currentUser.displayName)[0].toUpperCase();
+  avatarEl.innerHTML = currentUser.photoURL
+    ? `<img src="${currentUser.photoURL}" />`
+    : (currentUser.displayName || currentUser.email)[0].toUpperCase();
 
   renderPreviewToggle();
   renderMain();
@@ -381,7 +379,7 @@ function renderMain() {
 ========================================================= */
 async function renderHome(main) {
   main.innerHTML = `
-    <div class="page-eyebrow">Student ID · ${currentStudentNumber}</div>
+    <div class="page-eyebrow">Student · ${currentUser.email}</div>
     <h1 class="page-title">Your submissions</h1>
     <div class="card" id="submissions-list"><div class="empty-hint">Loading…</div></div>
   `;
@@ -405,12 +403,30 @@ async function renderHome(main) {
     const complete = partsSnap.docs.filter(p => ["Complete", "Picked up"].includes(p.data().status)).length;
     const flagged = partsSnap.docs.some(p => (p.data().status || "").startsWith("Flagged"));
     const tone = flagged ? "cardinal" : (complete === total && total > 0) ? "gold" : "neutral";
+
+    let partActions = "";
+    partsSnap.docs.forEach(pDoc => {
+      const p = pDoc.data();
+      const canWithdraw = ["Submitted", "Claimed", "Prepping/slicing"].includes(p.status);
+      const canStop = p.status === "Printing/Lasering";
+
+      if (canWithdraw) {
+        partActions += `<button class="mini-btn danger" style="margin-top:6px;" onclick="withdrawPart('${pDoc.id}','${escapeHtml(sub.label)}')">Withdraw</button> `;
+      } else if (canStop) {
+        partActions += `<button class="mini-btn danger" style="margin-top:6px;" onclick="requestStopPart('${pDoc.id}','${escapeHtml(sub.label)}')">Request Stop</button> `;
+      }
+      if (p.fileRef) {
+        partActions += `<a href="${p.fileRef}" target="_blank" class="mini-btn plain" style="text-decoration:none; display:inline-block; margin-top:6px;">View File</a>`;
+      }
+    });
+
     const statusLabel = flagged ? "Flagged — see part detail" : `${complete} of ${total} parts complete`;
 
     rowsHtml.push(`<div class="list-row">
       <div>
         <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
         <div class="row-sub">${statusLabel}</div>
+        <div>${partActions}</div>
       </div>
       <span class="pill ${tone}">${escapeHtml(sub.overallStatus || "Submitted")}</span>
     </div>`);
@@ -419,7 +435,42 @@ async function renderHome(main) {
 }
 
 /* =========================================================
-   SUBMIT FLOW
+   STUDENT CANCEL / WITHDRAW & STOP ACTIONS
+========================================================= */
+async function withdrawPart(partId, label) {
+  if (!confirm("Are you sure you want to withdraw this job?")) return;
+  await db.collection("parts").doc(partId).update({
+    status: "Withdrawn",
+    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      status: "Withdrawn",
+      timestamp: new Date().toISOString(),
+      actor: currentUser.email,
+      note: "Student self-withdrew",
+    })
+  });
+  sendMilestoneEmail(currentUser.email, label, "Withdrawn");
+  renderHome(document.getElementById("main"));
+}
+
+async function requestStopPart(partId, label) {
+  if (!confirm("Request an immediate machine stop? This flags peer leaders to halt printing.")) return;
+  await db.collection("parts").doc(partId).update({
+    failureReason: "Stop Requested by Student",
+    flagMessage: "Student initiated urgent stop.",
+    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      status: "Printing/Lasering",
+      timestamp: new Date().toISOString(),
+      actor: currentUser.email,
+      note: "Urgent stop requested by student",
+    })
+  });
+  sendMilestoneEmail(currentUser.email, label, "Stop Requested");
+  alert("Stop request submitted. Peer leaders have been alerted.");
+  renderHome(document.getElementById("main"));
+}
+
+/* =========================================================
+   SUBMIT — guided flow, writes real Firestore docs + uploads file via Apps Script
 ========================================================= */
 function renderSubmit(main) {
   const paths = [
@@ -504,14 +555,12 @@ function selectPath(key) {
 }
 
 function onJobTypeChange() {
-  const jobType = document.getElementById("f-jobtype")?.value || "print";
+  const jobType = document.getElementById("f-jobtype").value;
   state.submitJobType = jobType;
   const fileInput = document.getElementById("f-file");
   const fileLabel = document.getElementById("f-file-label");
   const materialLabel = document.getElementById("f-material-label");
   
-  if (!fileInput) return;
-
   fileInput.value = "";
   state.submitFile = null;
   document.getElementById("file-drop-hint").textContent = "No file selected yet";
@@ -555,21 +604,14 @@ async function submitJob() {
   const material = document.getElementById("f-material").value.trim();
   const color = document.getElementById("f-color").value.trim();
 
-  if (!label) return setSubmitStatus("error", "Please provide a Submission Label."); 
-  if (!material) return setSubmitStatus("error", "Please specify a Material (e.g., PLA, Acrylic)."); 
-  if (!color) return setSubmitStatus("error", "Please specify a Color."); 
-  if (isNaN(quantity) || quantity < 1) return setSubmitStatus("error", "Quantity must be at least 1."); 
-  if (!state.submitFile) return setSubmitStatus("error", "Please choose a file to upload."); 
-
-  const fileName = state.submitFile.name.toLowerCase();
-  const allowedPrintExts = ['.3mf', '.stl'];
-  const allowedLaserExts = ['.ai', '.pdf'];
-  
-  if (jobType === "print" && !allowedPrintExts.some(ext => fileName.endsWith(ext))) {
-    return setSubmitStatus("error", "Invalid format for 3D Prints. Please upload a .3mf or .stl file.");
+  if (!label || !material || !color || isNaN(quantity) || quantity < 1) { 
+    setSubmitStatus("error", "Please complete all fields with valid information."); 
+    return; 
   }
-  if (jobType === "laser" && !allowedLaserExts.some(ext => fileName.endsWith(ext))) {
-    return setSubmitStatus("error", "Invalid format for Laser Cutting. Please upload an .ai or .pdf file.");
+
+  if (!state.submitFile) { 
+    setSubmitStatus("error", "Please choose a file to upload."); 
+    return; 
   }
 
   document.getElementById("submit-btn").disabled = true;
@@ -594,7 +636,7 @@ async function submitJob() {
       statusHistory: [{
         status: "Submitted",
         timestamp: new Date().toISOString(),
-        actor: currentUser.displayName,
+        actor: currentUser.email,
         note: state.submitPath === "assisted" ? "Peer-leader slicing requested" : null,
       }],
       currentAssignee: null,
@@ -604,7 +646,11 @@ async function submitJob() {
 
     setSubmitStatus("pending", "Uploading file…");
     const fileUrl = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
+
     await db.collection("parts").doc(partRef.id).update({ fileRef: fileUrl });
+
+    // Send confirmation email
+    sendMilestoneEmail(currentUser.email, label, "Submitted");
 
     setSubmitStatus("success", "Submitted! Head to your dashboard to track it.");
     setTimeout(() => setPage("home"), 1200);
@@ -639,9 +685,25 @@ function uploadFileViaAppsScript(file, submissionId, partId) {
         reject(err);
       }
     };
-    reader.onerror = () => reject(new Error("Couldn't read file"));
+    reader.onerror = () => reject(new Error("Couldn't read the file"));
     reader.readAsDataURL(file);
   });
+}
+
+function sendMilestoneEmail(recipientEmail, label, status, failureReason = null, flagMessage = null) {
+  fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      action: "sendStatusEmail",
+      recipientEmail,
+      label,
+      status,
+      failureReason,
+      flagMessage,
+      actor: currentUser.email
+    })
+  }).catch(err => console.error("Automated email dispatch error:", err));
 }
 
 function escapeHtml(str) {
@@ -649,7 +711,7 @@ function escapeHtml(str) {
 }
 
 /* =========================================================
-   LIVE QUEUE
+   LIVE QUEUE — peer leader / teacher only
 ========================================================= */
 const PIPELINE = ["Submitted", "Claimed", "Prepping/slicing", "Printing/Lasering", "Complete", "Picked up"];
 const NEXT_STATUS = {
@@ -673,7 +735,7 @@ let queueCache = { parts: [], submissions: {} };
 
 async function renderQueue(main) {
   main.innerHTML = `
-    <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.displayName)}</div>
+    <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.displayName || currentUser.email)}</div>
     <h1 class="page-title">Live queue</h1>
     <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="refreshQueue()">Refresh</button></div>
     <div id="queue-cols" class="queue-cols"><div class="empty-hint">Loading…</div></div>
@@ -720,7 +782,7 @@ function renderQueueCard(part, submission) {
     ${flagged ? `<div class="flag-note">Flagged — ${escapeHtml(part.failureReason)}${part.flagMessage ? ": " + escapeHtml(part.flagMessage) : ""}</div>` : ""}
     ${part.currentAssignee ? `<div class="row-sub">Assignee: ${escapeHtml(part.currentAssignee)}</div>` : ""}
     ${part.handoffNote ? `<div class="row-sub">Note: ${escapeHtml(part.handoffNote)}</div>` : ""}
-    ${part.fileRef ? `<div class="row-sub"><a href="${part.fileRef}" target="_blank" style="color:var(--navy); font-weight:600;">Open File 🔗</a></div>` : ""}
+    ${part.fileRef ? `<div style="margin-top:4px;"><a href="${part.fileRef}" target="_blank" class="mini-btn plain" style="text-decoration:none; display:inline-block;">Open Drive File</a></div>` : ""}
     ${flaggingPartId === part.id
       ? renderFlagForm(part.id)
       : `<div class="queue-actions">
@@ -735,7 +797,7 @@ function renderFlagForm(partId) {
   return `<div class="flag-form">
     <div class="flag-form-label">Reason</div>
     ${FLAG_CATEGORIES.map((c) => `<label class="flag-radio"><input type="radio" name="flag-cat-${partId}" value="${c}"> ${c}</label>`).join("")}
-    <textarea id="flag-msg-${partId}" rows="2" placeholder="Optional message to student…"></textarea>
+    <textarea id="flag-msg-${partId}" rows="2" placeholder="Optional message to the student…"></textarea>
     <div class="queue-actions">
       <button class="mini-btn" onclick="submitFlag('${partId}')">Submit flag</button>
       <button class="mini-btn plain" onclick="cancelFlagForm()">Cancel</button>
@@ -747,7 +809,6 @@ function openFlagForm(partId) {
   flaggingPartId = partId;
   refreshQueue();
 }
-
 function cancelFlagForm() {
   flaggingPartId = null;
   refreshQueue();
@@ -756,18 +817,30 @@ function cancelFlagForm() {
 async function advancePart(partId, currentStatus) {
   const next = NEXT_STATUS[currentStatus];
   if (!next) return;
+
+  const part = queueCache.parts.find(p => p.id === partId);
+  const sub = queueCache.submissions[part?.submissionId];
+
   await db.collection("parts").doc(partId).update({
     status: next,
-    currentAssignee: currentUser.displayName,
+    currentAssignee: currentUser.email,
     failureReason: null,
     flagMessage: null,
     statusHistory: firebase.firestore.FieldValue.arrayUnion({
       status: next,
       timestamp: new Date().toISOString(),
-      actor: currentUser.displayName,
+      actor: currentUser.email,
       note: null,
     }),
   });
+
+  // Email notifications for key transitions
+  if (sub && sub.studentNumber) {
+    if (next === "Printing/Lasering" || next === "Complete") {
+      sendMilestoneEmail(sub.studentNumber, sub.label, next);
+    }
+  }
+
   await refreshQueue();
 }
 
@@ -777,28 +850,43 @@ async function submitFlag(partId) {
   const category = checked.value;
   const message = document.getElementById(`flag-msg-${partId}`).value.trim();
 
+  const part = queueCache.parts.find(p => p.id === partId);
+  const sub = queueCache.submissions[part?.submissionId];
+
   await db.collection("parts").doc(partId).update({
     status: "Claimed",
-    currentAssignee: currentUser.displayName,
+    currentAssignee: currentUser.email,
     failureReason: category,
     flagMessage: message || null,
     statusHistory: firebase.firestore.FieldValue.arrayUnion({
       status: "Claimed",
       timestamp: new Date().toISOString(),
-      actor: currentUser.displayName,
+      actor: currentUser.email,
       note: "Flagged: " + category + (message ? " — " + message : ""),
     }),
   });
+
+  if (sub && sub.studentNumber) {
+    sendMilestoneEmail(sub.studentNumber, sub.label, "Flagged", category, message);
+  }
+
   flaggingPartId = null;
   await refreshQueue();
 }
 
 async function editHandoffNote(partId) {
   const part = queueCache.parts.find((p) => p.id === partId);
-  const note = prompt("Handoff note for next peer leader:", part?.handoffNote || "");
+  const note = prompt("Handoff note for the next peer leader:", part?.handoffNote || "");
   if (note === null) return;
   await db.collection("parts").doc(partId).update({ handoffNote: note });
   await refreshQueue();
+}
+
+/* =========================================================
+   IN-BROWSER STL THREE.JS VIEWER MODAL
+========================================================= */
+function closeStlModal() {
+  document.getElementById("stl-modal").classList.remove("open");
 }
 </script>
 </body>

@@ -180,6 +180,7 @@
 <!-- Firebase SDKs -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 
 <script>
 /* =========================================================
@@ -202,6 +203,7 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw6kKA3usKAwOvm
 ========================================================= */
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const auth = firebase.auth();
 
 let currentUser = null;
 let currentRole = "student";        
@@ -230,17 +232,31 @@ const NAV = {
 };
 const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "Teacher / Admin" };
 
-/* Check for existing user session on page load */
+/* Check for existing user session on page load.
+   Firestore's security rules require request.auth != null, so we need an
+   anonymous Firebase Auth session established before any Firestore call. */
 window.addEventListener("DOMContentLoaded", () => {
-  const session = localStorage.getItem("lab_user_session");
-  if (session) {
-    try {
-      const u = JSON.parse(session);
-      loadUserSession(u);
-    } catch (e) {
-      localStorage.removeItem("lab_user_session");
+  auth.onAuthStateChanged((user) => {
+    if (!user) {
+      // Not signed in yet — kick off anonymous sign-in.
+      // onAuthStateChanged will fire again once it completes.
+      auth.signInAnonymously().catch((err) => {
+        console.error("Anonymous sign-in failed:", err);
+        showLoginError("Couldn't connect to the login service. Please refresh and try again.");
+      });
+      return;
     }
-  }
+
+    const session = localStorage.getItem("lab_user_session");
+    if (session) {
+      try {
+        const u = JSON.parse(session);
+        loadUserSession(u);
+      } catch (e) {
+        localStorage.removeItem("lab_user_session");
+      }
+    }
+  });
 });
 
 /* =========================================================
@@ -263,6 +279,12 @@ async function signInWithStudentNumber(event) {
   btn.textContent = "Verifying…";
 
   try {
+    // Make sure we have an authenticated (anonymous) session before touching
+    // Firestore — the security rules require request.auth != null.
+    if (!auth.currentUser) {
+      await auth.signInAnonymously();
+    }
+
     const userDocRef = db.collection("users").doc(sNum);
     const userDoc = await userDocRef.get();
 

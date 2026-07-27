@@ -95,6 +95,25 @@
   .status-msg.pending { background: #EEEBE2; color: var(--slate); display: block; }
   .status-msg.success { background: rgba(199,182,131,0.13); color: var(--gold-deep); display: block; }
   .status-msg.error { background: #8B233114; color: var(--cardinal); display: block; }
+
+  .secondary-btn { background: transparent; color: var(--slate); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; }
+  .secondary-btn:hover { background: #EFEDE5; }
+
+  .queue-cols { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; align-items: start; }
+  .queue-col { border-radius: 12px; padding: 12px; background: #EFEDE5; min-height: 140px; }
+  .queue-col-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate); margin-bottom: 12px; }
+  .queue-empty { font-size: 12px; color: var(--slate-light); }
+  .queue-card { font-size: 12px; padding: 10px; border-radius: 8px; background: var(--paper); border: 1px solid var(--border); line-height: 1.4; margin-bottom: 10px; }
+  .queue-card-title { font-size: 13px; font-weight: 500; color: var(--ink); margin-bottom: 4px; }
+  .queue-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .mini-btn { font-size: 11px; font-weight: 600; padding: 5px 9px; border-radius: 6px; border: none; background: var(--navy); color: white; }
+  .mini-btn.danger { background: var(--cardinal); }
+  .mini-btn.plain { background: #EEEBE2; color: var(--slate); }
+  .flag-note { background: rgba(139,35,49,0.08); color: var(--cardinal); padding: 6px 8px; border-radius: 6px; font-size: 11px; margin: 6px 0; }
+  .flag-form { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .flag-form-label { font-size: 11px; font-weight: 600; color: var(--slate); margin-bottom: 4px; }
+  .flag-radio { display: block; font-size: 12px; color: var(--ink); margin-bottom: 4px; }
+  .flag-form textarea { width: 100%; font-family: 'Inter'; font-size: 12px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; margin-top: 4px; resize: vertical; }
 </style>
 </head>
 <body>
@@ -187,7 +206,7 @@ const NAV = {
     { key: "learn", label: "Learning", enabled: false },
   ],
   peer_leader: [
-    { key: "queue", label: "Live Queue", enabled: false },
+    { key: "queue", label: "Live Queue", enabled: true },
     { key: "batches", label: "Batches", enabled: false },
     { key: "printers", label: "Printer Status", enabled: false },
   ],
@@ -196,6 +215,7 @@ const NAV = {
     { key: "reports", label: "Reports", enabled: false },
     { key: "fleet", label: "Printer Fleet", enabled: false },
     { key: "roster", label: "Roster", enabled: false },
+    { key: "queue", label: "Live Queue", enabled: true },
   ],
 };
 const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "Teacher / Admin" };
@@ -242,32 +262,24 @@ auth.onAuthStateChanged(async (user) => {
 
   currentUser = user;
 
-  // Users are keyed by EMAIL, not Firebase's internal uid. This is deliberate:
-  // email is known in advance (from the roster sheet import), a random uid
-  // generated at first sign-in is not — so keying by email is what lets a
-  // roster import "pre-provision" a student before they've ever signed in,
-  // and it's also what lets Firestore security rules look someone's role up
-  // directly (rules can only do direct-path lookups, not searches).
+  // Users are keyed by EMAIL, not Firebase's internal uid — see the roster
+  // import setup for why. This lookup also doubles as the real access gate:
+  // only people already imported from the roster sheet get in at all.
   const userDocRef = db.collection("users").doc(user.email);
   const userDoc = await userDocRef.get();
-  if (userDoc.exists) {
-    const d = userDoc.data();
-    currentRole = d.role || "student";
-    currentStudentNumber = d.studentNumber || user.email;
-  } else {
-    // No roster record yet for this email — auto-create a student placeholder.
-    // If a roster import runs later (or already ran under a slightly different
-    // email), it will overwrite this doc's fields, including studentNumber.
-    await userDocRef.set({
-      name: user.displayName || "",
-      email: user.email,
-      role: "student",
-      studentNumber: user.email, // placeholder until roster import sets the real ID
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    currentRole = "student";
-    currentStudentNumber = user.email;
+
+  if (!userDoc.exists) {
+    // Not on the roster — domain restriction alone isn't enough, since any
+    // district account (not just this class/lab's students) can pass that
+    // check. Block access rather than silently defaulting them to student.
+    showLoginError("This account isn't on the Fab Lab roster yet. Ask your teacher to add you.");
+    auth.signOut();
+    return;
   }
+
+  const d = userDoc.data();
+  currentRole = d.role || "student";
+  currentStudentNumber = d.studentNumber || user.email;
 
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("app-screen").classList.add("visible");
@@ -351,6 +363,7 @@ function renderMain() {
   const main = document.getElementById("main");
   if (state.page === "home") return renderHome(main);
   if (state.page === "submit") return renderSubmit(main);
+  if (state.page === "queue") return renderQueue(main);
   main.innerHTML = `<div class="empty-hint">This page isn't built yet.</div>`;
 }
 
@@ -592,6 +605,162 @@ function uploadFileViaAppsScript(file, submissionId, partId) {
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+/* =========================================================
+   LIVE QUEUE (Phase 2) — peer leader / teacher only
+========================================================= */
+const PIPELINE = ["Submitted", "Claimed", "Prepping/slicing", "Printing/Lasering", "Complete", "Picked up"];
+const NEXT_STATUS = {
+  "Submitted": "Claimed",
+  "Claimed": "Prepping/slicing",
+  "Prepping/slicing": "Printing/Lasering",
+  "Printing/Lasering": "Complete",
+  "Complete": "Picked up",
+};
+const NEXT_LABEL = {
+  "Submitted": "Claim",
+  "Claimed": "Start prepping",
+  "Prepping/slicing": "Start run",
+  "Printing/Lasering": "Mark complete",
+  "Complete": "Mark picked up",
+};
+const FLAG_CATEGORIES = ["warped", "wrong file", "wrong scale", "machine issue", "other"];
+
+let flaggingPartId = null;
+let queueCache = { parts: [], submissions: {} };
+
+async function renderQueue(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.displayName || currentUser.email)}</div>
+    <h1 class="page-title">Live queue</h1>
+    <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="refreshQueue()">Refresh</button></div>
+    <div id="queue-cols" class="queue-cols"><div class="empty-hint">Loading…</div></div>
+  `;
+  flaggingPartId = null;
+  await refreshQueue();
+}
+
+async function refreshQueue() {
+  const partsSnap = await db.collection("parts").get();
+  const parts = partsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Fetch each related submission once (not once per part) so labels can show.
+  const subIds = [...new Set(parts.map(p => p.submissionId).filter(Boolean))];
+  const subMap = {};
+  await Promise.all(subIds.map(async (id) => {
+    const doc = await db.collection("submissions").doc(id).get();
+    subMap[id] = doc.exists ? doc.data() : { label: "Unknown submission" };
+  }));
+  queueCache = { parts, submissions: subMap };
+
+  const cols = document.getElementById("queue-cols");
+  if (!cols) return; // navigated away before this resolved
+  cols.innerHTML = PIPELINE.map((status) => {
+    const items = parts.filter((p) => p.status === status);
+    return `<div class="queue-col">
+      <div class="queue-col-title">${status} (${items.length})</div>
+      ${items.length === 0
+        ? `<div class="queue-empty">—</div>`
+        : items.map((p) => renderQueueCard(p, subMap[p.submissionId])).join("")}
+    </div>`;
+  }).join("");
+}
+
+function renderQueueCard(part, submission) {
+  const label = submission ? submission.label : "Unknown submission";
+  const flagged = !!part.failureReason && part.status === "Claimed";
+  const nextLabel = NEXT_LABEL[part.status];
+  const showFlagBtn = ["Claimed", "Prepping/slicing", "Printing/Lasering"].includes(part.status);
+  const jobIcon = part.jobType === "laser" ? "Laser" : "Print";
+
+  return `<div class="queue-card">
+    <div class="queue-card-title">${escapeHtml(label)}</div>
+    <div class="row-sub mono">${jobIcon} · qty ${part.quantity || 1}${part.material ? " · " + escapeHtml(part.material) : ""}</div>
+    ${flagged ? `<div class="flag-note">Flagged — ${escapeHtml(part.failureReason)}${part.flagMessage ? ": " + escapeHtml(part.flagMessage) : ""}</div>` : ""}
+    ${part.currentAssignee ? `<div class="row-sub">Assignee: ${escapeHtml(part.currentAssignee)}</div>` : ""}
+    ${part.handoffNote ? `<div class="row-sub">Note: ${escapeHtml(part.handoffNote)}</div>` : ""}
+    ${flaggingPartId === part.id
+      ? renderFlagForm(part.id)
+      : `<div class="queue-actions">
+          ${nextLabel ? `<button class="mini-btn" onclick="advancePart('${part.id}','${part.status}')">${nextLabel}</button>` : ""}
+          ${showFlagBtn ? `<button class="mini-btn danger" onclick="openFlagForm('${part.id}')">Flag issue</button>` : ""}
+          <button class="mini-btn plain" onclick="editHandoffNote('${part.id}')">Note</button>
+        </div>`}
+  </div>`;
+}
+
+function renderFlagForm(partId) {
+  return `<div class="flag-form">
+    <div class="flag-form-label">Reason</div>
+    ${FLAG_CATEGORIES.map((c) => `<label class="flag-radio"><input type="radio" name="flag-cat-${partId}" value="${c}"> ${c}</label>`).join("")}
+    <textarea id="flag-msg-${partId}" rows="2" placeholder="Optional message to the student…"></textarea>
+    <div class="queue-actions">
+      <button class="mini-btn" onclick="submitFlag('${partId}')">Submit flag</button>
+      <button class="mini-btn plain" onclick="cancelFlagForm()">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function openFlagForm(partId) {
+  flaggingPartId = partId;
+  refreshQueue();
+}
+function cancelFlagForm() {
+  flaggingPartId = null;
+  refreshQueue();
+}
+
+async function advancePart(partId, currentStatus) {
+  const next = NEXT_STATUS[currentStatus];
+  if (!next) return;
+  await db.collection("parts").doc(partId).update({
+    status: next,
+    currentAssignee: currentUser.email,
+    // Advancing a job also clears any prior flag once it's moving forward again —
+    // the flag's job was to route it back to Claimed for another look, not to
+    // follow it around forever once someone's acted on it.
+    failureReason: null,
+    flagMessage: null,
+    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      status: next,
+      timestamp: new Date().toISOString(),
+      actor: currentUser.email,
+      note: null,
+    }),
+  });
+  await refreshQueue();
+}
+
+async function submitFlag(partId) {
+  const checked = document.querySelector(`input[name="flag-cat-${partId}"]:checked`);
+  if (!checked) { alert("Choose a reason category first."); return; }
+  const category = checked.value;
+  const message = document.getElementById(`flag-msg-${partId}`).value.trim();
+
+  await db.collection("parts").doc(partId).update({
+    status: "Claimed",
+    currentAssignee: currentUser.email,
+    failureReason: category,
+    flagMessage: message || null,
+    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      status: "Claimed",
+      timestamp: new Date().toISOString(),
+      actor: currentUser.email,
+      note: "Flagged: " + category + (message ? " — " + message : ""),
+    }),
+  });
+  flaggingPartId = null;
+  await refreshQueue();
+}
+
+async function editHandoffNote(partId) {
+  const part = queueCache.parts.find((p) => p.id === partId);
+  const note = prompt("Handoff note for the next peer leader:", part?.handoffNote || "");
+  if (note === null) return; // cancelled
+  await db.collection("parts").doc(partId).update({ handoffNote: note });
+  await refreshQueue();
+}
+
 </script>
 </body>
 </html>

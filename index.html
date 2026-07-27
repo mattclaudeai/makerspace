@@ -168,7 +168,7 @@
 
 <script>
 /* =========================================================
-   CONFIG — replace with your actual values
+   CONFIG — UPDATED WITH YOUR LIVE URLS
 ========================================================= */
 const firebaseConfig = {
   apiKey: "AIzaSyAu-wxO-5Jr1jQvAH-gL6aYdoZD3yyNuKQ",
@@ -180,7 +180,7 @@ const firebaseConfig = {
   measurementId: "G-7055KGRPZD"
 };
 
-const SCHOOL_DOMAIN = "https://millcreekhs.gcpsk12.org/";
+const SCHOOL_DOMAIN = "gcpsk12.org";
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw6kKA3usKAwOvm2-DRr3xBMGd-2otkvJyKSmZXmqLGUMwgFv-_2ztACUsLUcJOIrHh9g/exec";
 
 /* =========================================================
@@ -484,7 +484,6 @@ function onJobTypeChange() {
   const fileLabel = document.getElementById("f-file-label");
   const materialLabel = document.getElementById("f-material-label");
   
-  // Clear file input on job type change to prevent submitting wrong type
   fileInput.value = "";
   state.submitFile = null;
   document.getElementById("file-drop-hint").textContent = "No file selected yet";
@@ -522,13 +521,25 @@ function setSubmitStatus(kind, text) {
 }
 
 async function submitJob() {
+  // Prevent submission if Web App URL is unconfigured
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("REPLACE_WITH")) {
+    setSubmitStatus("error", "Google Apps Script URL is not configured. Please paste your Web App Exec URL into index.html.");
+    return;
+  }
+
   const label = document.getElementById("f-label").value.trim();
   const jobType = document.getElementById("f-jobtype").value;
   const quantity = parseInt(document.getElementById("f-quantity").value, 10);
   const material = document.getElementById("f-material").value.trim();
   const color = document.getElementById("f-color").value.trim();
 
-  // --- 1. TEXT BOX VALIDATION ---
+  // Validate Path vs File Extension Rules
+  if (state.submitPath === "solo" && jobType === "print" && state.submitFile && !state.submitFile.name.toLowerCase().endsWith(".3mf")) {
+    setSubmitStatus("error", "Solo path requires a pre-sliced .3mf file. Select 'Add to batch' or 'Peer-leader slices for you' if submitting a raw .stl file.");
+    return;
+  }
+
+  // Text inputs validation
   if (!label) { 
     setSubmitStatus("error", "Please provide a Submission Label."); 
     return; 
@@ -546,7 +557,7 @@ async function submitJob() {
     return; 
   }
 
-  // --- 2. FILE SELECTION & EXTENSION VALIDATION ---
+  // File choice validation
   if (!state.submitFile) { 
     setSubmitStatus("error", "Please choose a file to upload."); 
     return; 
@@ -570,12 +581,11 @@ async function submitJob() {
     }
   }
 
-  // --- 3. SUBMISSION PROCESS ---
+  // Create submission records & triggers upload
   document.getElementById("submit-btn").disabled = true;
   setSubmitStatus("pending", "Creating submission…");
 
   try {
-    // Create the parent submission doc
     const submissionRef = await db.collection("submissions").add({
       studentNumber: currentStudentNumber,
       label,
@@ -583,7 +593,6 @@ async function submitJob() {
       overallStatus: "Submitted",
     });
 
-    // Create the part doc
     const partRef = await db.collection("parts").add({
       submissionId: submissionRef.id,
       jobType,
@@ -603,17 +612,15 @@ async function submitJob() {
       fileRef: null,
     });
 
-    // Upload the file via Apps Script
     setSubmitStatus("pending", "Uploading file…");
     const fileUrl = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
 
-    // Store the resulting Drive link back on the part doc
     await db.collection("parts").doc(partRef.id).update({ fileRef: fileUrl });
 
     setSubmitStatus("success", "Submitted! Head to your dashboard to track it.");
     setTimeout(() => setPage("home"), 1200);
   } catch (err) {
-    setSubmitStatus("error", "Something went wrong: " + err.message);
+    setSubmitStatus("error", "Upload Error: " + err.message);
     document.getElementById("submit-btn").disabled = false;
   }
 }

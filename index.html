@@ -963,6 +963,13 @@ const NEXT_STATUS = {
   "Printing/Lasering": "Complete",
   "Complete": "Picked up",
 };
+const PREV_STATUS = {
+  "Claimed": "Submitted",
+  "Prepping/slicing": "Claimed",
+  "Printing/Lasering": "Prepping/slicing",
+  "Complete": "Printing/Lasering",
+  "Picked up": "Complete",
+};
 const NEXT_LABEL = {
   "Submitted": "Claim",
   "Claimed": "Start prepping",
@@ -972,14 +979,36 @@ const NEXT_LABEL = {
 };
 const FLAG_CATEGORIES = ["warped", "wrong file", "wrong scale", "machine issue", "other"];
 
+// Fixed machine list for now — matches the physical fleet described in the project
+// notes. If the fleet changes, this is the one place to edit.
+const MACHINES = [
+  { id: "p1s-1", label: "Bambu P1S #1", type: "print" },
+  { id: "p1s-2", label: "Bambu P1S #2", type: "print" },
+  { id: "p1s-3", label: "Bambu P1S #3", type: "print" },
+  { id: "p1s-4", label: "Bambu P1S #4", type: "print" },
+  { id: "ender-1", label: "Ender 3 Pro #1", type: "print" },
+  { id: "ender-2", label: "Ender 3 Pro #2", type: "print" },
+  { id: "jellybox", label: "Jellybox (TPU only)", type: "print" },
+  { id: "laser-1", label: "Laser cutter", type: "laser" },
+];
+function machinesForType(jobType) {
+  return MACHINES.filter((m) => m.type === jobType);
+}
+
 let flaggingPartId = null;
 let queueCache = { parts: [], submissions: {} };
+let batchSelectMode = false;
+let selectedPartIds = new Set();
 
 async function renderQueue(main) {
   main.innerHTML = `
     <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.name)}</div>
     <h1 class="page-title">Live queue</h1>
-    <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="refreshQueue()">Refresh</button></div>
+    <div style="margin-bottom:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <button class="secondary-btn" onclick="refreshQueue()">Refresh</button>
+      <button class="secondary-btn" onclick="toggleBatchSelectMode()">${batchSelectMode ? "Cancel batching" : "Select parts to batch"}</button>
+      <span id="batch-select-summary"></span>
+    </div>
     <div id="queue-cols" class="queue-cols"><div class="empty-hint">Loading…</div></div>
   `;
   flaggingPartId = null;
@@ -998,6 +1027,8 @@ async function refreshQueue() {
   }));
   queueCache = { parts, submissions: subMap };
 
+  renderBatchSelectSummary();
+
   const cols = document.getElementById("queue-cols");
   if (!cols) return; 
   cols.innerHTML = PIPELINE.map((status) => {
@@ -1011,27 +1042,196 @@ async function refreshQueue() {
   }).join("");
 }
 
+/* ---- Batching ---- */
+
+function renderBatchSelectSummary() {
+  const el = document.getElementById("batch-select-summary");
+  if (!el) return;
+  if (!batchSelectMode) { el.innerHTML = ""; return; }
+  const n = selectedPartIds.size;
+  el.innerHTML = `
+    <span class="row-sub" style="margin-right:8px;">${n} selected</span>
+    <button class="mini-btn" ${n < 2 ? "disabled" : ""} onclick="combineSelectedIntoBatch()">Combine into batch</button>
+  `;
+}
+
+function toggleBatchSelectMode() {
+  batchSelectMode = !batchSelectMode;
+  selectedPartIds = new Set();
+  refreshQueue();
+}
+
+function togglePartSelected(partId) {
+  if (selectedPartIds.has(partId)) selectedPartIds.delete(partId);
+  else selectedPartIds.add(partId);
+  refreshQueue();
+}
+
+async function combineSelectedIntoBatch() {
+  if (selectedPartIds.size < 2) return;
+  const ids = [...selectedPartIds];
+
+  const batchRef = await db.collection("batches").add({
+    status: "Active",
+    printerId: null,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: currentUser.name,
+    currentAssignee: currentUser.name,
+    handoffNote: null,
+  });
+
+  const writeBatch = db.batch();
+  ids.forEach((id) => {
+    writeBatch.update(db.collection("parts").doc(id), { batchId: batchRef.id });
+  });
+  await writeBatch.commit();
+
+  batchSelectMode = false;
+  selectedPartIds = new Set();
+  await refreshQueue();
+}
+
+function batchSiblings(batchId, excludePartId) {
+  return queueCache.parts.filter((p) => p.batchId === batchId && p.id !== excludePartId);
+}
+
+async function removeFromBatch(partId) {
+  const part = queueCache.parts.find((p) => p.id === partId);
+  if (!part || !part.batchId) return;
+  const batchId = part.batchId;
+  const siblings = batchSiblings(batchId, partId);
+
+  if (siblings.length <= 1) {
+    // Only one (or zero) member would remain — dissolve the batch entirely
+    // rather than leave a "batch of one" behind.
+    const writeBatch = db.batch();
+    writeBatch.update(db.collection("parts").doc(partId), { batchId: null });
+    siblings.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { batchId: null }));
+    writeBatch.delete(db.collection("batches").doc(batchId));
+    await writeBatch.commit();
+  } else {
+    await db.collection("parts").doc(partId).update({ batchId: null });
+  }
+  await refreshQueue();
+}
+
+async function advanceBatch(batchId) {
+  const members = queueCache.parts.filter((p) => p.batchId === batchId);
+  const writeBatch = db.batch();
+  let anyAdvanced = false;
+  members.forEach((p) => {
+    const next = NEXT_STATUS[p.status];
+    if (!next) return;
+    anyAdvanced = true;
+    writeBatch.update(db.collection("parts").doc(p.id), {
+      status: next,
+      currentAssignee: currentUser.name,
+      failureReason: null,
+      flagMessage: null,
+      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+        status: next,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: "Advanced as part of batch",
+      }),
+    });
+  });
+  if (anyAdvanced) await writeBatch.commit();
+  await refreshQueue();
+}
+
+/* ---- Machine assignment ---- */
+
+async function assignMachine(partId, machineId) {
+  await db.collection("parts").doc(partId).update({ printerId: machineId || null });
+  await refreshQueue();
+}
+
+async function assignBatchMachine(batchId, machineId) {
+  const members = queueCache.parts.filter((p) => p.batchId === batchId);
+  const writeBatch = db.batch();
+  writeBatch.update(db.collection("batches").doc(batchId), { printerId: machineId || null });
+  members.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { printerId: machineId || null }));
+  await writeBatch.commit();
+  await refreshQueue();
+}
+
+function machineLabel(machineId) {
+  const m = MACHINES.find((m) => m.id === machineId);
+  return m ? m.label : machineId;
+}
+
+/* ---- Card rendering ---- */
+
 function renderQueueCard(part, submission) {
   const label = submission ? submission.label : "Unknown submission";
   const flagged = !!part.failureReason && part.status === "Claimed";
   const nextLabel = NEXT_LABEL[part.status];
+  const prevStatus = PREV_STATUS[part.status];
   const showFlagBtn = ["Claimed", "Prepping/slicing", "Printing/Lasering"].includes(part.status);
   const jobIcon = part.jobType === "laser" ? "Laser" : "Print";
+  const machines = machinesForType(part.jobType);
+
+  const selectCheckbox = batchSelectMode
+    ? `<label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--slate); margin-bottom:8px;">
+        <input type="checkbox" ${selectedPartIds.has(part.id) ? "checked" : ""} onchange="togglePartSelected('${part.id}')" /> Select for batch
+      </label>`
+    : "";
+
+  const machineSelectHtml = (!part.batchId && machines.length)
+    ? `<div class="form-row" style="margin:8px 0 0;">
+        <label class="flag-form-label">Machine</label>
+        <select onchange="assignMachine('${part.id}', this.value)">
+          <option value="">— Unassigned —</option>
+          ${machines.map((m) => `<option value="${m.id}" ${part.printerId === m.id ? "selected" : ""}>${escapeHtml(m.label)}</option>`).join("")}
+        </select>
+      </div>`
+    : "";
 
   return `<div class="queue-card">
+    ${selectCheckbox}
     ${renderThumbBox(part, "card")}
     <div class="queue-card-title">${escapeHtml(label)}</div>
     <div class="row-sub mono">${jobIcon} · qty ${part.quantity || 1}${part.material ? " · " + escapeHtml(part.material) : ""}</div>
+    ${part.batchId ? renderBatchBadge(part) : ""}
     ${flagged ? `<div class="flag-note">Flagged — ${escapeHtml(part.failureReason)}${part.flagMessage ? ": " + escapeHtml(part.flagMessage) : ""}</div>` : ""}
     ${part.currentAssignee ? `<div class="row-sub">Assignee: ${escapeHtml(part.currentAssignee)}</div>` : ""}
     ${part.handoffNote ? `<div class="row-sub">Note: ${escapeHtml(part.handoffNote)}</div>` : ""}
+    ${!part.batchId && part.printerId ? `<div class="row-sub">Machine: ${escapeHtml(machineLabel(part.printerId))}</div>` : ""}
+    ${machineSelectHtml}
     ${flaggingPartId === part.id
       ? renderFlagForm(part.id)
       : `<div class="queue-actions">
           ${nextLabel ? `<button class="mini-btn" onclick="advancePart('${part.id}','${part.status}')">${nextLabel}</button>` : ""}
+          ${prevStatus ? `<button class="mini-btn plain" onclick="sendBackPart('${part.id}','${part.status}')">Send back</button>` : ""}
           ${showFlagBtn ? `<button class="mini-btn danger" onclick="openFlagForm('${part.id}')">Flag issue</button>` : ""}
           <button class="mini-btn plain" onclick="editHandoffNote('${part.id}')">Note</button>
         </div>`}
+  </div>`;
+}
+
+function renderBatchBadge(part) {
+  const siblings = batchSiblings(part.batchId, part.id);
+  const names = siblings.map((p) => {
+    const sub = queueCache.submissions[p.submissionId];
+    return sub ? sub.label : "Untitled";
+  });
+  const machines = machinesForType(part.jobType);
+
+  return `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy);">
+    <b>Batch</b> · ${siblings.length + 1} parts${names.length ? " — with " + names.map((n) => escapeHtml(n)).join(", ") : ""}
+    ${part.printerId ? `<div class="row-sub" style="color: var(--navy);">Machine: ${escapeHtml(machineLabel(part.printerId))}</div>` : ""}
+    ${machines.length ? `<div class="form-row" style="margin-top:6px;">
+      <label class="flag-form-label">Assign whole batch to machine</label>
+      <select onchange="assignBatchMachine('${part.batchId}', this.value)">
+        <option value="">— Unassigned —</option>
+        ${machines.map((m) => `<option value="${m.id}" ${part.printerId === m.id ? "selected" : ""}>${escapeHtml(m.label)}</option>`).join("")}
+      </select>
+    </div>` : ""}
+    <div class="queue-actions" style="margin-top:6px;">
+      <button class="mini-btn" onclick="advanceBatch('${part.batchId}')">Advance whole batch</button>
+      <button class="mini-btn plain" onclick="removeFromBatch('${part.id}')">Remove this part</button>
+    </div>
   </div>`;
 }
 
@@ -1070,6 +1270,21 @@ async function advancePart(partId, currentStatus) {
       timestamp: new Date().toISOString(),
       actor: currentUser.name,
       note: null,
+    }),
+  });
+  await refreshQueue();
+}
+
+async function sendBackPart(partId, currentStatus) {
+  const prev = PREV_STATUS[currentStatus];
+  if (!prev) return;
+  await db.collection("parts").doc(partId).update({
+    status: prev,
+    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      status: prev,
+      timestamp: new Date().toISOString(),
+      actor: currentUser.name,
+      note: "Sent back from " + currentStatus,
     }),
   });
   await refreshQueue();

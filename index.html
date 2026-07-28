@@ -476,13 +476,16 @@ async function renderHome(main) {
   for (const doc of docsSorted) {
     const sub = doc.data();
     const partsSnap = await db.collection("parts").where("submissionId", "==", doc.id).get();
-    const total = partsSnap.size;
-    const complete = partsSnap.docs.filter(p => ["Complete", "Picked up"].includes(p.data().status)).length;
-    const flagged = partsSnap.docs.some(p => (p.data().status || "").startsWith("Flagged"));
+    // A part that's been fully split across other batches (quantity hit 0) has
+    // nothing left to track on its own — exclude it so counts stay accurate.
+    const activeParts = partsSnap.docs.filter(p => (p.data().quantity ?? 1) > 0);
+    const total = activeParts.length;
+    const complete = activeParts.filter(p => ["Complete", "Picked up"].includes(p.data().status)).length;
+    const flagged = activeParts.some(p => (p.data().status || "").startsWith("Flagged"));
     const tone = flagged ? "cardinal" : (complete === total && total > 0) ? "gold" : "neutral";
     const statusLabel = flagged ? "Flagged — see part detail" : `${complete} of ${total} parts complete`;
 
-    const firstPart = partsSnap.docs[0]?.data();
+    const firstPart = activeParts[0]?.data();
     const thumbHtml = renderThumbBox(firstPart, "row");
 
     rowsHtml.push(`<div class="list-row">
@@ -999,20 +1002,37 @@ let flaggingPartId = null;
 let queueCache = { parts: [], submissions: {} };
 let batchSelectMode = false;
 let selectedPartIds = new Set();
+let selectedPartQuantities = new Map(); // partId -> qty going into the batch (may be less than part.quantity)
+let queueTypeFilter = "all"; // "all" | "print" | "laser"
 
 async function renderQueue(main) {
   main.innerHTML = `
     <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.name)}</div>
     <h1 class="page-title">Live queue</h1>
+    <div style="margin-bottom:12px; display:flex; gap:6px; align-items:center;">
+      <button class="secondary-btn" style="${queueTypeFilter === 'all' ? 'background:var(--navy);color:white;border-color:var(--navy);' : ''}" onclick="setQueueTypeFilter('all')">All jobs</button>
+      <button class="secondary-btn" style="${queueTypeFilter === 'print' ? 'background:var(--navy);color:white;border-color:var(--navy);' : ''}" onclick="setQueueTypeFilter('print')">🖨 Print</button>
+      <button class="secondary-btn" style="${queueTypeFilter === 'laser' ? 'background:var(--cardinal);color:white;border-color:var(--cardinal);' : ''}" onclick="setQueueTypeFilter('laser')">✂ Laser</button>
+    </div>
     <div style="margin-bottom:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <button class="secondary-btn" onclick="refreshQueue()">Refresh</button>
       <button class="secondary-btn" onclick="toggleBatchSelectMode()">${batchSelectMode ? "Cancel batching" : "Select parts to batch"}</button>
       <span id="batch-select-summary"></span>
     </div>
+    ${batchSelectMode ? `<div class="row-sub" style="margin-bottom:12px;">Batching is for print jobs only, and only parts already at the same stage — pick from a single column.</div>` : ""}
     <div id="queue-cols" class="queue-cols"><div class="empty-hint">Loading…</div></div>
   `;
   flaggingPartId = null;
   await refreshQueue();
+}
+
+function setQueueTypeFilter(type) {
+  queueTypeFilter = type;
+  // Job-type filter changing mid-selection could leave selections referring to
+  // hidden cards — clearest to just reset the in-progress batch selection.
+  selectedPartIds = new Set();
+  selectedPartQuantities = new Map();
+  renderQueue(document.getElementById("main"));
 }
 
 async function refreshQueue() {
@@ -1027,17 +1047,25 @@ async function refreshQueue() {
   }));
   queueCache = { parts, submissions: subMap };
 
+  renderQueueBoard();
+}
+
+function renderQueueBoard() {
   renderBatchSelectSummary();
 
   const cols = document.getElementById("queue-cols");
-  if (!cols) return; 
+  if (!cols) return;
+  const visibleParts = queueCache.parts
+    .filter((p) => (p.quantity ?? 1) > 0) // fully split into other batches — nothing left to act on here
+    .filter((p) => queueTypeFilter === "all" || p.jobType === queueTypeFilter);
+
   cols.innerHTML = PIPELINE.map((status) => {
-    const items = parts.filter((p) => p.status === status);
+    const items = visibleParts.filter((p) => p.status === status);
     return `<div class="queue-col">
       <div class="queue-col-title">${status} (${items.length})</div>
       ${items.length === 0
         ? `<div class="queue-empty">—</div>`
-        : items.map((p) => renderQueueCard(p, subMap[p.submissionId])).join("")}
+        : items.map((p) => renderQueueCard(p, queueCache.submissions[p.submissionId])).join("")}
     </div>`;
   }).join("");
 }
@@ -1058,18 +1086,59 @@ function renderBatchSelectSummary() {
 function toggleBatchSelectMode() {
   batchSelectMode = !batchSelectMode;
   selectedPartIds = new Set();
-  refreshQueue();
+  selectedPartQuantities = new Map();
+  renderQueue(document.getElementById("main"));
 }
 
 function togglePartSelected(partId) {
-  if (selectedPartIds.has(partId)) selectedPartIds.delete(partId);
-  else selectedPartIds.add(partId);
-  refreshQueue();
+  const part = queueCache.parts.find((p) => p.id === partId);
+  if (!part) return;
+
+  if (selectedPartIds.has(partId)) {
+    selectedPartIds.delete(partId);
+    selectedPartQuantities.delete(partId);
+  } else {
+    // Once something's selected, only allow adding parts at the same pipeline
+    // stage — batching is meant for parts a peer leader is combining onto one
+    // plate right now, not jobs sitting at different stages.
+    if (selectedPartIds.size > 0) {
+      const refPart = queueCache.parts.find((p) => p.id === [...selectedPartIds][0]);
+      if (refPart && refPart.status !== part.status) {
+        alert(`These parts aren't at the same stage. Pick parts that are all currently "${refPart.status}."`);
+        return;
+      }
+    }
+    selectedPartIds.add(partId);
+    selectedPartQuantities.set(partId, part.quantity || 1); // default to the full remaining amount
+  }
+  renderQueueBoard();
+}
+
+function setSelectedPartQty(partId, value) {
+  const part = queueCache.parts.find((p) => p.id === partId);
+  if (!part) return;
+  let qty = parseInt(value, 10);
+  if (isNaN(qty) || qty < 1) qty = 1;
+  if (qty > (part.quantity || 1)) qty = part.quantity || 1;
+  selectedPartQuantities.set(partId, qty);
+  renderQueueBoard();
 }
 
 async function combineSelectedIntoBatch() {
   if (selectedPartIds.size < 2) return;
   const ids = [...selectedPartIds];
+
+  // Defensive re-check in case cached state drifted from what's on screen.
+  const chosen = ids.map((id) => queueCache.parts.find((p) => p.id === id)).filter(Boolean);
+  const statuses = new Set(chosen.map((p) => p.status));
+  if (statuses.size > 1) {
+    alert("Selected parts must all be at the same stage to combine into a batch.");
+    return;
+  }
+  if (chosen.some((p) => p.jobType !== "print")) {
+    alert("Batching currently only supports print jobs.");
+    return;
+  }
 
   const batchRef = await db.collection("batches").add({
     status: "Active",
@@ -1081,13 +1150,67 @@ async function combineSelectedIntoBatch() {
   });
 
   const writeBatch = db.batch();
-  ids.forEach((id) => {
-    writeBatch.update(db.collection("parts").doc(id), { batchId: batchRef.id });
+
+  chosen.forEach((part) => {
+    const totalQty = part.quantity || 1;
+    let batchQty = selectedPartQuantities.get(part.id) || totalQty;
+    if (batchQty > totalQty) batchQty = totalQty;
+
+    if (batchQty >= totalQty) {
+      // Whole part goes into the batch — no split needed.
+      writeBatch.update(db.collection("parts").doc(part.id), { batchId: batchRef.id });
+      return;
+    }
+
+    // Only some of this part's quantity fits on this plate. Peel off a new
+    // part doc carrying just that amount into the batch, and leave the
+    // original behind (still active in the queue) with the remainder.
+    const splitRef = db.collection("parts").doc();
+    writeBatch.set(splitRef, {
+      submissionId: part.submissionId,
+      jobType: part.jobType,
+      quantity: batchQty,
+      material: part.material || null,
+      color: part.color || null,
+      batchable: true,
+      status: part.status,
+      statusHistory: [{
+        status: part.status,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: `Split from an ${totalQty}-unit request — ${batchQty} of ${totalQty} going into this batch`,
+      }],
+      currentAssignee: currentUser.name,
+      handoffNote: null,
+      fileRef: part.fileRef || null,
+      thumbnailDataUrl: part.thumbnailDataUrl || null,
+      printerId: null,
+      batchId: batchRef.id,
+      splitFromPartId: part.id,
+    });
+
+    writeBatch.update(db.collection("parts").doc(part.id), {
+      quantity: totalQty - batchQty,
+      splitHistory: firebase.firestore.FieldValue.arrayUnion({
+        intoPartId: splitRef.id,
+        batchId: batchRef.id,
+        quantity: batchQty,
+        timestamp: new Date().toISOString(),
+      }),
+      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+        status: part.status,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: `Split off ${batchQty} of ${totalQty} into a batch — ${totalQty - batchQty} remaining here`,
+      }),
+    });
   });
+
   await writeBatch.commit();
 
   batchSelectMode = false;
   selectedPartIds = new Set();
+  selectedPartQuantities = new Map();
   await refreshQueue();
 }
 
@@ -1169,13 +1292,22 @@ function renderQueueCard(part, submission) {
   const nextLabel = NEXT_LABEL[part.status];
   const prevStatus = PREV_STATUS[part.status];
   const showFlagBtn = ["Claimed", "Prepping/slicing", "Printing/Lasering"].includes(part.status);
-  const jobIcon = part.jobType === "laser" ? "Laser" : "Print";
+  const isLaser = part.jobType === "laser";
   const machines = machinesForType(part.jobType);
+  const accentColor = isLaser ? "var(--cardinal)" : "var(--navy)";
 
-  const selectCheckbox = batchSelectMode
-    ? `<label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--slate); margin-bottom:8px;">
-        <input type="checkbox" ${selectedPartIds.has(part.id) ? "checked" : ""} onchange="togglePartSelected('${part.id}')" /> Select for batch
-      </label>`
+  const isSelected = selectedPartIds.has(part.id);
+  const selectCheckbox = (batchSelectMode && !isLaser)
+    ? `<div style="margin-bottom:8px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--slate);">
+          <input type="checkbox" ${isSelected ? "checked" : ""} onchange="togglePartSelected('${part.id}')" /> Select for batch
+        </label>
+        ${isSelected && (part.quantity || 1) > 1 ? `<label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--slate); margin-top:6px;">
+          Qty for this plate:
+          <input type="number" min="1" max="${part.quantity}" value="${selectedPartQuantities.get(part.id) || part.quantity}" style="width:56px;" onchange="setSelectedPartQty('${part.id}', this.value)" />
+          <span>of ${part.quantity}</span>
+        </label>` : ""}
+      </div>`
     : "";
 
   const machineSelectHtml = (!part.batchId && machines.length)
@@ -1188,11 +1320,14 @@ function renderQueueCard(part, submission) {
       </div>`
     : "";
 
-  return `<div class="queue-card">
+  return `<div class="queue-card" style="border-left: 3px solid ${accentColor};">
     ${selectCheckbox}
     ${renderThumbBox(part, "card")}
+    <span class="pill ${isLaser ? "cardinal" : "gold"}" style="margin-bottom:6px; display:inline-block;">${isLaser ? "✂ Laser" : "🖨 Print"}</span>
     <div class="queue-card-title">${escapeHtml(label)}</div>
-    <div class="row-sub mono">${jobIcon} · qty ${part.quantity || 1}${part.material ? " · " + escapeHtml(part.material) : ""}</div>
+    <div class="row-sub mono">qty ${part.quantity || 1}${part.material ? " · " + escapeHtml(part.material) : ""}</div>
+    ${(part.splitHistory && part.splitHistory.length) ? `<div class="row-sub">${part.splitHistory.reduce((s, h) => s + h.quantity, 0)} already sent to other batch${part.splitHistory.length > 1 ? "es" : ""} — ${part.quantity || 0} left to schedule</div>` : ""}
+    ${part.splitFromPartId ? `<div class="row-sub">Split off from a larger request</div>` : ""}
     ${part.batchId ? renderBatchBadge(part) : ""}
     ${flagged ? `<div class="flag-note">Flagged — ${escapeHtml(part.failureReason)}${part.flagMessage ? ": " + escapeHtml(part.flagMessage) : ""}</div>` : ""}
     ${part.currentAssignee ? `<div class="row-sub">Assignee: ${escapeHtml(part.currentAssignee)}</div>` : ""}

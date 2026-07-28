@@ -1130,7 +1130,7 @@ function uploadFileViaAppsScript(file, submissionId, partId) {
         });
         const data = await res.json();
         if (!data.ok) return reject(new Error(data.error || "Upload failed"));
-        resolve(data.fileUrl);
+        resolve({ fileUrl: data.fileUrl, downloadUrl: data.downloadUrl });
       } catch (err) {
         reject(err);
       }

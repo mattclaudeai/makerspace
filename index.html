@@ -235,8 +235,8 @@ const NAV = {
   ],
   peer_leader: [
     { key: "queue", label: "Live Queue", enabled: true },
-    { key: "batches", label: "Batches", enabled: false },
-    { key: "printers", label: "Printer Status", enabled: false },
+    { key: "batches", label: "Batches", enabled: true },
+    { key: "printers", label: "Printer Status", enabled: true },
   ],
   teacher: [
     { key: "overview", label: "Overview", enabled: true },
@@ -436,6 +436,8 @@ function renderMain() {
   if (state.page === "submit") return renderSubmit(main);
   if (state.page === "queue") return renderQueue(main);
   if (state.page === "overview") return renderOverview(main);
+  if (state.page === "batches") return renderBatchesPage(main);
+  if (state.page === "printers") return renderPrintersPage(main);
   main.innerHTML = `<div class="empty-hint">This page isn't built yet.</div>`;
 }
 
@@ -1035,7 +1037,7 @@ function setQueueTypeFilter(type) {
   renderQueue(document.getElementById("main"));
 }
 
-async function refreshQueue() {
+async function loadQueueCache() {
   const partsSnap = await db.collection("parts").get();
   const parts = partsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
@@ -1046,8 +1048,20 @@ async function refreshQueue() {
     subMap[id] = doc.exists ? doc.data() : { label: "Unknown submission" };
   }));
   queueCache = { parts, submissions: subMap };
+}
 
+async function refreshQueue() {
+  await loadQueueCache();
   renderQueueBoard();
+}
+
+// Batch-related actions (advance/assign/remove/dissolve) can be triggered
+// from either the Live Queue or the Batches page — refresh whichever is active.
+async function refreshAfterQueueMutation() {
+  if (state.page === "queue") return refreshQueue();
+  if (state.page === "batches") return renderBatchesPage(document.getElementById("main"));
+  if (state.page === "printers") return renderPrintersPage(document.getElementById("main"));
+  return loadQueueCache();
 }
 
 function renderQueueBoard() {
@@ -1235,7 +1249,16 @@ async function removeFromBatch(partId) {
   } else {
     await db.collection("parts").doc(partId).update({ batchId: null });
   }
-  await refreshQueue();
+  await refreshAfterQueueMutation();
+}
+
+async function dissolveBatch(batchId) {
+  const members = queueCache.parts.filter((p) => p.batchId === batchId);
+  const writeBatch = db.batch();
+  members.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { batchId: null }));
+  writeBatch.delete(db.collection("batches").doc(batchId));
+  await writeBatch.commit();
+  await refreshAfterQueueMutation();
 }
 
 async function advanceBatch(batchId) {
@@ -1260,14 +1283,14 @@ async function advanceBatch(batchId) {
     });
   });
   if (anyAdvanced) await writeBatch.commit();
-  await refreshQueue();
+  await refreshAfterQueueMutation();
 }
 
 /* ---- Machine assignment ---- */
 
 async function assignMachine(partId, machineId) {
   await db.collection("parts").doc(partId).update({ printerId: machineId || null });
-  await refreshQueue();
+  await refreshAfterQueueMutation();
 }
 
 async function assignBatchMachine(batchId, machineId) {
@@ -1276,7 +1299,7 @@ async function assignBatchMachine(batchId, machineId) {
   writeBatch.update(db.collection("batches").doc(batchId), { printerId: machineId || null });
   members.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { printerId: machineId || null }));
   await writeBatch.commit();
-  await refreshQueue();
+  await refreshAfterQueueMutation();
 }
 
 function machineLabel(machineId) {
@@ -1310,7 +1333,7 @@ function renderQueueCard(part, submission) {
       </div>`
     : "";
 
-  const machineSelectHtml = (!part.batchId && machines.length)
+  const machineSelectHtml = (!part.batchId && machines.length && part.status === "Printing/Lasering")
     ? `<div class="form-row" style="margin:8px 0 0;">
         <label class="flag-form-label">Machine</label>
         <select onchange="assignMachine('${part.id}', this.value)">
@@ -1356,7 +1379,7 @@ function renderBatchBadge(part) {
   return `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy);">
     <b>Batch</b> · ${siblings.length + 1} parts${names.length ? " — with " + names.map((n) => escapeHtml(n)).join(", ") : ""}
     ${part.printerId ? `<div class="row-sub" style="color: var(--navy);">Machine: ${escapeHtml(machineLabel(part.printerId))}</div>` : ""}
-    ${machines.length ? `<div class="form-row" style="margin-top:6px;">
+    ${(machines.length && part.status === "Printing/Lasering") ? `<div class="form-row" style="margin-top:6px;">
       <label class="flag-form-label">Assign whole batch to machine</label>
       <select onchange="assignBatchMachine('${part.batchId}', this.value)">
         <option value="">— Unassigned —</option>
@@ -1453,6 +1476,132 @@ async function editHandoffNote(partId) {
   if (note === null) return;
   await db.collection("parts").doc(partId).update({ handoffNote: note });
   await refreshQueue();
+}
+
+/* =========================================================
+   BATCHES (overview across all active batches)
+========================================================= */
+async function renderBatchesPage(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.name)}</div>
+    <h1 class="page-title">Batches</h1>
+    <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="renderBatchesPage(document.getElementById('main'))">Refresh</button></div>
+    <div id="batches-list" class="card"><div class="empty-hint">Loading…</div></div>
+  `;
+
+  await loadQueueCache();
+
+  const batchedParts = queueCache.parts.filter((p) => p.batchId && (p.quantity ?? 1) > 0);
+  const listEl = document.getElementById("batches-list");
+  if (!listEl) return;
+
+  if (batchedParts.length === 0) {
+    listEl.innerHTML = `<div class="empty-hint">No active batches right now — combine parts from the Live Queue to start one.</div>`;
+    return;
+  }
+
+  const grouped = {};
+  batchedParts.forEach((p) => {
+    if (!grouped[p.batchId]) grouped[p.batchId] = [];
+    grouped[p.batchId].push(p);
+  });
+
+  listEl.innerHTML = Object.entries(grouped).map(([batchId, members]) => {
+    const statuses = new Set(members.map((m) => m.status));
+    const statusLabel = statuses.size === 1 ? [...statuses][0] : "Mixed stages";
+    const canAssignMachine = statuses.size === 1 && [...statuses][0] === "Printing/Lasering";
+    const machineOptions = machinesForType(members[0].jobType);
+    const currentMachine = members[0].printerId;
+
+    const memberList = members.map((m) => {
+      const sub = queueCache.submissions[m.submissionId];
+      return `${escapeHtml(sub ? sub.label : "Untitled")} (qty ${m.quantity || 1}${statuses.size > 1 ? ", " + escapeHtml(m.status) : ""})`;
+    }).join(" · ");
+
+    return `<div class="list-row" style="flex-direction:column; align-items:stretch; gap:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div class="row-title">Batch · ${members.length} parts</div>
+          <div class="row-sub">${memberList}</div>
+        </div>
+        <span class="pill ${statuses.size === 1 ? "gold" : "cardinal"}">${escapeHtml(statusLabel)}</span>
+      </div>
+      ${currentMachine ? `<div class="row-sub">Machine: ${escapeHtml(machineLabel(currentMachine))}</div>` : ""}
+      ${canAssignMachine && machineOptions.length ? `<div class="form-row" style="margin:0;">
+        <label class="flag-form-label">Assign to machine</label>
+        <select onchange="assignBatchMachine('${batchId}', this.value)">
+          <option value="">— Unassigned —</option>
+          ${machineOptions.map((m) => `<option value="${m.id}" ${currentMachine === m.id ? "selected" : ""}>${escapeHtml(m.label)}</option>`).join("")}
+        </select>
+      </div>` : ""}
+      <div class="queue-actions">
+        <button class="mini-btn" onclick="advanceBatch('${batchId}')">Advance whole batch</button>
+        <button class="mini-btn plain" onclick="dissolveBatch('${batchId}')">Dissolve batch</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/* =========================================================
+   PRINTER STATUS
+========================================================= */
+async function renderPrintersPage(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.name)}</div>
+    <h1 class="page-title">Printer status</h1>
+    <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="renderPrintersPage(document.getElementById('main'))">Refresh</button></div>
+    <div id="printers-list" class="card"><div class="empty-hint">Loading…</div></div>
+  `;
+
+  await loadQueueCache();
+
+  const printerDocsSnap = await db.collection("printers").get();
+  const printerStatusMap = {};
+  printerDocsSnap.docs.forEach((d) => { printerStatusMap[d.id] = d.data(); });
+
+  const listEl = document.getElementById("printers-list");
+  if (!listEl) return;
+
+  listEl.innerHTML = MACHINES.map((m) => {
+    const persisted = printerStatusMap[m.id] || {};
+    const isPaused = persisted.status === "paused";
+    const runningPart = queueCache.parts.find((p) => p.printerId === m.id && p.status === "Printing/Lasering");
+    const jobLabel = runningPart ? (queueCache.submissions[runningPart.submissionId]?.label || "Untitled job") : null;
+
+    let stateLabel, toneClass;
+    if (isPaused) { stateLabel = "Paused"; toneClass = "cardinal"; }
+    else if (runningPart) { stateLabel = "Running"; toneClass = "gold"; }
+    else { stateLabel = "Idle"; toneClass = "neutral"; }
+
+    const subLine = isPaused
+      ? (persisted.pauseReason ? escapeHtml(persisted.pauseReason) : "Paused for maintenance")
+      : (runningPart ? `Running: ${escapeHtml(jobLabel)} (qty ${runningPart.quantity || 1})` : "No job assigned");
+
+    return `<div class="list-row">
+      <div>
+        <div class="row-title">${escapeHtml(m.label)}</div>
+        <div class="row-sub">${subLine}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="pill ${toneClass}">${stateLabel}</span>
+        ${isPaused
+          ? `<button class="mini-btn plain" onclick="resumeMachine('${m.id}')">Resume</button>`
+          : `<button class="mini-btn plain" onclick="pauseMachine('${m.id}')">Pause</button>`}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function pauseMachine(machineId) {
+  const reason = prompt("Reason for pausing this machine (e.g. nozzle clog, out of filament):", "");
+  if (reason === null) return;
+  await db.collection("printers").doc(machineId).set({ status: "paused", pauseReason: reason || "No reason given" }, { merge: true });
+  await renderPrintersPage(document.getElementById("main"));
+}
+
+async function resumeMachine(machineId) {
+  await db.collection("printers").doc(machineId).set({ status: "idle", pauseReason: null }, { merge: true });
+  await renderPrintersPage(document.getElementById("main"));
 }
 </script>
 </body>

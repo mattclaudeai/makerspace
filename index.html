@@ -483,9 +483,22 @@ async function renderHome(main) {
     const activeParts = partsSnap.docs.filter(p => (p.data().quantity ?? 1) > 0);
     const total = activeParts.length;
     const complete = activeParts.filter(p => ["Complete", "Picked up"].includes(p.data().status)).length;
-    const flagged = activeParts.some(p => (p.data().status || "").startsWith("Flagged"));
+    const flagged = activeParts.some(p => !!p.data().failureReason);
+
+    // Show the real current stage(s) rather than a static "Submitted" — a
+    // submission usually has one active part, but a split (e.g. only some of
+    // a quantity fit on a plate) can leave two active parts at different stages.
+    const distinctStatuses = [...new Set(activeParts.map(p => p.data().status || "Submitted"))];
+    const pillLabel = flagged
+      ? "Needs attention"
+      : (distinctStatuses.length === 1 ? distinctStatuses[0] : distinctStatuses.join(" + "));
     const tone = flagged ? "cardinal" : (complete === total && total > 0) ? "gold" : "neutral";
-    const statusLabel = flagged ? "Flagged — see part detail" : `${complete} of ${total} parts complete`;
+    const statusLabel = flagged
+      ? (() => {
+          const flaggedPart = activeParts.find(p => !!p.data().failureReason)?.data();
+          return `Flagged — ${escapeHtml(flaggedPart.failureReason)}${flaggedPart.flagMessage ? ": " + escapeHtml(flaggedPart.flagMessage) : ""}`;
+        })()
+      : (total > 1 ? `${complete} of ${total} parts complete` : "");
 
     const firstPart = activeParts[0]?.data();
     const thumbHtml = renderThumbBox(firstPart, "row");
@@ -495,10 +508,10 @@ async function renderHome(main) {
         ${thumbHtml}
         <div>
           <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
-          <div class="row-sub">${statusLabel}</div>
+          ${statusLabel ? `<div class="row-sub">${statusLabel}</div>` : ""}
         </div>
       </div>
-      <span class="pill ${tone}">${escapeHtml(sub.overallStatus || "Submitted")}</span>
+      <span class="pill ${tone}">${escapeHtml(pillLabel)}</span>
     </div>`);
   }
   document.getElementById("submissions-list").innerHTML = rowsHtml.join("");

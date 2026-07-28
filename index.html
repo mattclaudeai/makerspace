@@ -225,7 +225,7 @@ let currentUser = null;
 let currentRole = "student";        
 let currentStudentNumber = null;     
 let previewRole = null;              
-let state = { page: "home", submitPath: null, submitJobType: null, submitFile: null, previewMenuOpen: false };
+let state = { page: "home", submitPath: null, submitJobType: null, submitFile: null, previewMenuOpen: false, fixingPartId: null, fixFile: null };
 
 const NAV = {
   student: [
@@ -240,6 +240,7 @@ const NAV = {
   ],
   teacher: [
     { key: "overview", label: "Overview", enabled: true },
+    { key: "submit", label: "Submit a Job", enabled: true },
     { key: "reports", label: "Reports", enabled: false },
     { key: "fleet", label: "Printer Fleet", enabled: false },
     { key: "roster", label: "Roster", enabled: false },
@@ -424,6 +425,7 @@ function setPreviewRole(r) {
 function setPage(key) {
   state.page = key;
   state.submitPath = null; state.submitJobType = null; state.submitFile = null;
+  state.fixingPartId = null; state.fixFile = null;
   renderShell();
 }
 
@@ -483,7 +485,8 @@ async function renderHome(main) {
     const activeParts = partsSnap.docs.filter(p => (p.data().quantity ?? 1) > 0);
     const total = activeParts.length;
     const complete = activeParts.filter(p => ["Complete", "Picked up"].includes(p.data().status)).length;
-    const flagged = activeParts.some(p => !!p.data().failureReason);
+    const flaggedPartDoc = activeParts.find(p => !!p.data().failureReason);
+    const flagged = !!flaggedPartDoc;
 
     // Show the real current stage(s) rather than a static "Submitted" — a
     // submission usually has one active part, but a split (e.g. only some of
@@ -495,7 +498,7 @@ async function renderHome(main) {
     const tone = flagged ? "cardinal" : (complete === total && total > 0) ? "gold" : "neutral";
     const statusLabel = flagged
       ? (() => {
-          const flaggedPart = activeParts.find(p => !!p.data().failureReason)?.data();
+          const flaggedPart = flaggedPartDoc.data();
           return `Flagged — ${escapeHtml(flaggedPart.failureReason)}${flaggedPart.flagMessage ? ": " + escapeHtml(flaggedPart.flagMessage) : ""}`;
         })()
       : (total > 1 ? `${complete} of ${total} parts complete` : "");
@@ -503,15 +506,24 @@ async function renderHome(main) {
     const firstPart = activeParts[0]?.data();
     const thumbHtml = renderThumbBox(firstPart, "row");
 
-    rowsHtml.push(`<div class="list-row">
-      <div class="row-with-thumb">
-        ${thumbHtml}
-        <div>
-          <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
-          ${statusLabel ? `<div class="row-sub">${statusLabel}</div>` : ""}
+    const isFixing = flagged && state.fixingPartId === flaggedPartDoc.id;
+    const fixButtonHtml = flagged && !isFixing
+      ? `<button class="mini-btn" style="margin-top:8px;" onclick="startFixSubmission('${flaggedPartDoc.id}')">Fix & resubmit</button>`
+      : "";
+
+    rowsHtml.push(`<div class="list-row" style="${isFixing ? "flex-direction:column; align-items:stretch; gap:10px;" : ""}">
+      <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+        <div class="row-with-thumb">
+          ${thumbHtml}
+          <div>
+            <div class="row-title">${escapeHtml(sub.label || "Untitled submission")}</div>
+            ${statusLabel ? `<div class="row-sub">${statusLabel}</div>` : ""}
+            ${fixButtonHtml}
+          </div>
         </div>
+        <span class="pill ${tone}">${escapeHtml(pillLabel)}</span>
       </div>
-      <span class="pill ${tone}">${escapeHtml(pillLabel)}</span>
+      ${isFixing ? renderFixForm(flaggedPartDoc.id, flaggedPartDoc.data(), sub) : ""}
     </div>`);
   }
   document.getElementById("submissions-list").innerHTML = rowsHtml.join("");
@@ -529,6 +541,162 @@ function renderThumbBox(part, size) {
   return `<div class="${cls}">${jobLabel}</div>`;
 }
 
+function startFixSubmission(partId) {
+  state.fixingPartId = partId;
+  state.fixFile = null;
+  renderHome(document.getElementById("main"));
+}
+
+function cancelFixSubmission() {
+  state.fixingPartId = null;
+  state.fixFile = null;
+  renderHome(document.getElementById("main"));
+}
+
+function onFixFileChosen(partId) {
+  const fileInput = document.getElementById(`fix-file-${partId}`);
+  const hint = document.getElementById(`fix-file-hint-${partId}`);
+  if (fileInput.files.length > 0) {
+    state.fixFile = fileInput.files[0];
+    hint.textContent = "Selected: " + state.fixFile.name;
+    hint.classList.add("has-file");
+  } else {
+    state.fixFile = null;
+    hint.textContent = "No file selected yet";
+    hint.classList.remove("has-file");
+  }
+}
+
+function renderFixForm(partId, part, submission) {
+  const isLaser = part.jobType === "laser";
+  const materialFieldHtml = isLaser
+    ? `<select id="fix-material-select-${partId}" onchange="onFixLaserMaterialChange('${partId}')">
+        ${["Chipboard", "Basswood", "Acrylic", "Other"].map((m) => `<option value="${m}" ${part.material === m ? "selected" : (m === "Other" && !["Chipboard","Basswood","Acrylic"].includes(part.material) ? "selected" : "")}>${m === "Other" ? "Other (describe)" : m}</option>`).join("")}
+      </select>
+      <input type="text" id="fix-material-other-${partId}" placeholder="Describe the material" value="${!["Chipboard","Basswood","Acrylic"].includes(part.material) ? escapeHtml(part.material || "") : ""}" style="margin-top:8px; ${["Chipboard","Basswood","Acrylic"].includes(part.material) ? "display:none;" : ""}" />`
+    : `<input type="text" id="fix-material-${partId}" value="${escapeHtml(part.material || "")}" />`;
+
+  return `<div class="flag-form" style="margin-top:0;">
+    <div class="flag-form-label">Fix & resubmit</div>
+    <div class="row-sub" style="margin-bottom:10px;">Upload a corrected file and update anything that needs fixing. This clears the flag and puts it back at the start of the queue.</div>
+
+    <div class="form-row">
+      <label class="field-label">Submission label</label>
+      <input type="text" id="fix-label-${partId}" value="${escapeHtml(submission.label || "")}" />
+    </div>
+    <div class="two-col">
+      <div class="form-row">
+        <label class="field-label">Quantity</label>
+        <input type="number" id="fix-quantity-${partId}" min="1" value="${part.quantity || 1}" />
+      </div>
+      <div class="form-row">
+        <label class="field-label">Color</label>
+        <input type="text" id="fix-color-${partId}" value="${escapeHtml(part.color || "")}" />
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="field-label">Material</label>
+      ${materialFieldHtml}
+    </div>
+    <div class="form-row">
+      <label class="field-label">Corrected file</label>
+      <input type="file" id="fix-file-${partId}" accept="${isLaser ? ".ai,.pdf" : ".3mf,.stl"}" onchange="onFixFileChosen('${partId}')" />
+      <div class="file-drop" id="fix-file-hint-${partId}">No file selected yet</div>
+    </div>
+    <div class="queue-actions">
+      <button class="mini-btn" onclick="resubmitFixedPart('${partId}')">Resubmit</button>
+      <button class="mini-btn plain" onclick="cancelFixSubmission()">Cancel</button>
+    </div>
+    <div class="status-msg" id="fix-status-${partId}"></div>
+  </div>`;
+}
+
+function onFixLaserMaterialChange(partId) {
+  const select = document.getElementById(`fix-material-select-${partId}`);
+  const otherInput = document.getElementById(`fix-material-other-${partId}`);
+  if (!select || !otherInput) return;
+  otherInput.style.display = select.value === "Other" ? "block" : "none";
+}
+
+async function resubmitFixedPart(partId) {
+  const part = queueCache?.parts?.find?.((p) => p.id === partId); // may be undefined outside the queue; fall back to a fresh read below
+  const statusEl = document.getElementById(`fix-status-${partId}`);
+  const setFixStatus = (kind, text) => {
+    if (!statusEl) return;
+    statusEl.className = "status-msg " + kind;
+    statusEl.textContent = text;
+  };
+
+  const partDoc = await db.collection("parts").doc(partId).get();
+  if (!partDoc.exists) { setFixStatus("error", "Couldn't find this part — try refreshing."); return; }
+  const partData = partDoc.data();
+  const isLaser = partData.jobType === "laser";
+
+  const label = document.getElementById(`fix-label-${partId}`).value.trim();
+  const quantity = parseInt(document.getElementById(`fix-quantity-${partId}`).value, 10);
+  const color = document.getElementById(`fix-color-${partId}`).value.trim();
+
+  let material;
+  if (isLaser) {
+    const materialSelect = document.getElementById(`fix-material-select-${partId}`).value;
+    material = materialSelect === "Other"
+      ? document.getElementById(`fix-material-other-${partId}`).value.trim()
+      : materialSelect;
+  } else {
+    material = document.getElementById(`fix-material-${partId}`).value.trim();
+  }
+
+  if (!label || !material || !color || isNaN(quantity) || quantity < 1) {
+    setFixStatus("error", "Please fill out all fields with valid inputs.");
+    return;
+  }
+  if (!state.fixFile) {
+    setFixStatus("error", "Please choose a corrected file to upload.");
+    return;
+  }
+
+  const fileName = state.fixFile.name.toLowerCase();
+  const allowedExts = isLaser ? ['.ai', '.pdf'] : ['.3mf', '.stl'];
+  if (!allowedExts.some((ext) => fileName.endsWith(ext))) {
+    setFixStatus("error", isLaser ? "Upload an .ai or .pdf file." : "Upload a .3mf or .stl file.");
+    return;
+  }
+
+  setFixStatus("pending", "Generating preview…");
+  try {
+    const thumbnailDataUrl = await generateThumbnail(state.fixFile, partData.jobType);
+
+    setFixStatus("pending", "Uploading corrected file…");
+    const fileUrl = await uploadFileViaAppsScript(state.fixFile, partData.submissionId, partId);
+
+    await db.collection("submissions").doc(partData.submissionId).update({ label });
+    await db.collection("parts").doc(partId).update({
+      quantity,
+      material,
+      color,
+      fileRef: fileUrl,
+      thumbnailDataUrl: thumbnailDataUrl || null,
+      status: "Submitted",
+      currentAssignee: null,
+      failureReason: null,
+      flagMessage: null,
+      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+        status: "Submitted",
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: `Resubmitted after being flagged: ${partData.failureReason || "issue"}`,
+      }),
+    });
+
+    setFixStatus("success", "Resubmitted! Back at the start of the queue.");
+    state.fixingPartId = null;
+    state.fixFile = null;
+    setTimeout(() => renderHome(document.getElementById("main")), 1000);
+  } catch (err) {
+    setFixStatus("error", "Something went wrong: " + err.message);
+  }
+}
+
 /* =========================================================
    SUBMIT PAGE
 ========================================================= */
@@ -539,8 +707,41 @@ function renderSubmit(main) {
     { key: "assisted", title: "Peer-leader slices for you", tag: "New to Bambu Studio", body: "Upload a raw STL — a peer leader will slice it directly." },
   ];
 
+  // Step 1: job type. Laser has no batching/slicing-assist equivalent, so it
+  // skips straight to the form once chosen — no point showing print-specific
+  // path cards to someone who's not printing anything.
+  if (!state.submitJobType) {
+    main.innerHTML = `
+      <div class="page-eyebrow">${escapeHtml(ROLE_LABEL[currentRole])} · New submission</div>
+      <h1 class="page-title">Submit a job</h1>
+      <div class="path-grid" style="grid-template-columns: repeat(2, 1fr);">
+        <button class="path-card" onclick="selectJobType('print')">
+          <h3>🖨 3D Print</h3>
+          <p>Upload a <code>.3mf</code> (or raw <code>.stl</code>) file to be printed on one of our Bambu printers.</p>
+        </button>
+        <button class="path-card" onclick="selectJobType('laser')">
+          <h3>✂ Laser cut / engrave</h3>
+          <p>Upload an <code>.ai</code> (or <code>.pdf</code>) file to be cut or engraved on the laser.</p>
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  const isLaser = state.submitJobType === "laser";
+
+  if (isLaser) {
+    state.submitPath = "solo"; // laser has one path, not three
+  }
+
   let pathBanner = "";
-  if (state.submitPath === "solo") {
+  if (isLaser) {
+    pathBanner = `<div class="flag-note" style="background: rgba(139,35,49,0.08); color: var(--cardinal); margin-bottom: 16px;">
+      <b>Laser file:</b> upload your <code>.ai</code> file (or a <code>.pdf</code> if that's what you have). Cut lines must be
+      <b>0.05pt stroke, pure red</b>; anything to be engraved must be a <b>solid black fill</b> — the laser software reads these
+      colors to know what to do, so double check them in Illustrator before uploading.
+    </div>`;
+  } else if (state.submitPath === "solo") {
     pathBanner = `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy); margin-bottom: 16px;">
       <b>Solo Path:</b> Upload your pre-sliced <code>.3mf</code> file directly from Bambu Studio.
     </div>`;
@@ -555,16 +756,17 @@ function renderSubmit(main) {
   }
 
   main.innerHTML = `
-    <div class="page-eyebrow">Student · New submission</div>
+    <div class="page-eyebrow">${escapeHtml(ROLE_LABEL[currentRole])} · New submission</div>
     <h1 class="page-title">Submit a job</h1>
+    <button class="secondary-btn" style="margin-bottom:16px;" onclick="changeJobType()">← ${isLaser ? "✂ Laser" : "🖨 3D Print"} — change</button>
 
-    <div class="path-grid">
+    ${!isLaser ? `<div class="path-grid">
       ${paths.map(p => `<button class="path-card ${state.submitPath === p.key ? "selected" : ""}" onclick="selectPath('${p.key}')">
         <h3>${escapeHtml(p.title)}</h3>
         <span class="pill gold">${escapeHtml(p.tag)}</span>
         <p>${escapeHtml(p.body)}</p>
       </button>`).join("")}
-    </div>
+    </div>` : ""}
 
     <div class="card form-section" id="submit-form" style="${state.submitPath ? "" : "display:none;"}">
       ${pathBanner}
@@ -575,10 +777,7 @@ function renderSubmit(main) {
       <div class="two-col">
         <div class="form-row">
           <label class="field-label">Job type</label>
-          <select id="f-jobtype" onchange="onJobTypeChange()">
-            <option value="print">3D Print</option>
-            <option value="laser">Laser</option>
-          </select>
+          <input type="text" value="${isLaser ? "Laser cut / engrave" : "3D Print"}" disabled style="background:#EFEDE5; color: var(--slate);" />
         </div>
         <div class="form-row">
           <label class="field-label">Quantity</label>
@@ -588,7 +787,15 @@ function renderSubmit(main) {
       <div class="two-col">
         <div class="form-row">
           <label class="field-label" id="f-material-label">Material</label>
-          <input type="text" id="f-material" placeholder="e.g. PLA" />
+          ${isLaser ? `
+            <select id="f-material-select" onchange="onLaserMaterialChange()">
+              <option value="Chipboard">Chipboard</option>
+              <option value="Basswood">Basswood</option>
+              <option value="Acrylic">Acrylic</option>
+              <option value="Other">Other (describe)</option>
+            </select>
+            <input type="text" id="f-material-other" placeholder="Describe the material (e.g. 1/4in plywood, engrave only — no cut)" style="margin-top:8px; display:none;" />
+          ` : `<input type="text" id="f-material" placeholder="e.g. PLA" />`}
         </div>
         <div class="form-row">
           <label class="field-label">Color</label>
@@ -606,7 +813,20 @@ function renderSubmit(main) {
       <div class="status-msg" id="submit-status"></div>
     </div>
   `;
-  onJobTypeChange();
+  updateFileFieldsForJobType();
+}
+
+function selectJobType(type) {
+  state.submitJobType = type;
+  state.submitPath = null;
+  renderSubmit(document.getElementById("main"));
+}
+
+function changeJobType() {
+  state.submitJobType = null;
+  state.submitPath = null;
+  state.submitFile = null;
+  renderSubmit(document.getElementById("main"));
 }
 
 function selectPath(key) {
@@ -614,13 +834,13 @@ function selectPath(key) {
   renderSubmit(document.getElementById("main"));
 }
 
-function onJobTypeChange() {
-  const jobType = document.getElementById("f-jobtype").value;
-  state.submitJobType = jobType;
+function updateFileFieldsForJobType() {
+  const jobType = state.submitJobType;
   const fileInput = document.getElementById("f-file");
   const fileLabel = document.getElementById("f-file-label");
   const materialLabel = document.getElementById("f-material-label");
-  
+  if (!fileInput) return;
+
   fileInput.value = "";
   state.submitFile = null;
   document.getElementById("file-drop-hint").textContent = "No file selected yet";
@@ -633,8 +853,15 @@ function onJobTypeChange() {
   } else {
     fileInput.accept = ".ai,.pdf";
     fileLabel.textContent = "File (.ai preferred, .pdf accepted)";
-    materialLabel.textContent = "Material (e.g. 1/8in acrylic, plywood)";
+    materialLabel.textContent = "Material";
   }
+}
+
+function onLaserMaterialChange() {
+  const select = document.getElementById("f-material-select");
+  const otherInput = document.getElementById("f-material-other");
+  if (!select || !otherInput) return;
+  otherInput.style.display = select.value === "Other" ? "block" : "none";
 }
 
 function onFileChosen() {
@@ -797,9 +1024,19 @@ function setSubmitStatus(kind, text) {
 
 async function submitJob() {
   const label = document.getElementById("f-label").value.trim();
-  const jobType = document.getElementById("f-jobtype").value;
+  const jobType = state.submitJobType;
   const quantity = parseInt(document.getElementById("f-quantity").value, 10);
-  const material = document.getElementById("f-material").value.trim();
+
+  let material;
+  if (jobType === "laser") {
+    const materialSelect = document.getElementById("f-material-select").value;
+    material = materialSelect === "Other"
+      ? document.getElementById("f-material-other").value.trim()
+      : materialSelect;
+  } else {
+    material = document.getElementById("f-material").value.trim();
+  }
+
   const color = document.getElementById("f-color").value.trim();
 
   if (!label || !material || !color || isNaN(quantity) || quantity < 1) { 
@@ -863,6 +1100,8 @@ async function submitJob() {
     const fileUrl = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
     await db.collection("parts").doc(partRef.id).update({ fileRef: fileUrl });
 
+    sendMilestoneEmail(currentUser.email, label, "Submitted"); // fire-and-forget, doesn't block the UI
+
     setSubmitStatus("success", "Submitted! Head to your dashboard to track it.");
     setTimeout(() => setPage("home"), 1200);
   } catch (err) {
@@ -899,6 +1138,50 @@ function uploadFileViaAppsScript(file, submissionId, partId) {
     reader.onerror = () => reject(new Error("Couldn't read the file"));
     reader.readAsDataURL(file);
   });
+}
+
+/* =========================================================
+   MILESTONE EMAILS
+   Only fired for Submitted, Complete, and Flagged — the states that are
+   either rare/high-signal or genuinely need the student to take action.
+   Claimed/Prepping/Printing-started are deliberately skipped so a peer
+   leader's accidental advance-then-send-back doesn't spam a student; that
+   in-between progress is still fully recorded in each part's statusHistory.
+========================================================= */
+async function getStudentEmailByNumber(studentNumber) {
+  if (!studentNumber) return null;
+  try {
+    const directDoc = await db.collection("users").doc(studentNumber).get();
+    if (directDoc.exists) return directDoc.data().email || null;
+    const querySnap = await db.collection("users").where("studentNumber", "==", studentNumber).limit(1).get();
+    if (!querySnap.empty) return querySnap.docs[0].data().email || null;
+  } catch (err) {
+    console.warn("Couldn't look up student email:", err);
+  }
+  return null;
+}
+
+async function sendMilestoneEmail(recipientEmail, label, status, extra = {}) {
+  if (!recipientEmail) return;
+  try {
+    await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "sendStatusEmail", recipientEmail, label, status, ...extra }),
+    });
+  } catch (err) {
+    console.warn("Milestone email failed to send:", err);
+  }
+}
+
+// Convenience: look up the owning student's email for a part's submission and
+// fire a milestone email — used from the queue where the acting user (a peer
+// leader) is not the recipient.
+async function sendMilestoneEmailForPart(part, status, extra = {}) {
+  const sub = queueCache.submissions[part.submissionId];
+  if (!sub) return;
+  const email = await getStudentEmailByNumber(sub.studentNumber);
+  if (email) sendMilestoneEmail(email, sub.label || "Your job", status, extra);
 }
 
 function escapeHtml(str) {
@@ -1034,7 +1317,7 @@ async function renderQueue(main) {
       <button class="secondary-btn" onclick="toggleBatchSelectMode()">${batchSelectMode ? "Cancel batching" : "Select parts to batch"}</button>
       <span id="batch-select-summary"></span>
     </div>
-    ${batchSelectMode ? `<div class="row-sub" style="margin-bottom:12px;">Batching is for print jobs only, and only parts already at the same stage — pick from a single column.</div>` : ""}
+    ${batchSelectMode ? `<div class="row-sub" style="margin-bottom:12px;">Batching combines parts already at the same stage, of the same job type, onto one plate or sheet — pick parts that also share the same material.</div>` : ""}
     <div id="queue-cols" class="queue-cols"><div class="empty-hint">Loading…</div></div>
   `;
   flaggingPartId = null;
@@ -1125,14 +1408,24 @@ function togglePartSelected(partId) {
     selectedPartIds.delete(partId);
     selectedPartQuantities.delete(partId);
   } else {
-    // Once something's selected, only allow adding parts at the same pipeline
-    // stage — batching is meant for parts a peer leader is combining onto one
-    // plate right now, not jobs sitting at different stages.
+    // Once something's selected, only allow adding parts that are at the same
+    // pipeline stage, the same job type, and the same material — batching means
+    // physically combining these onto one plate or sheet, so all three have to match.
     if (selectedPartIds.size > 0) {
       const refPart = queueCache.parts.find((p) => p.id === [...selectedPartIds][0]);
-      if (refPart && refPart.status !== part.status) {
-        alert(`These parts aren't at the same stage. Pick parts that are all currently "${refPart.status}."`);
-        return;
+      if (refPart) {
+        if (refPart.status !== part.status) {
+          alert(`These parts aren't at the same stage. Pick parts that are all currently "${refPart.status}."`);
+          return;
+        }
+        if (refPart.jobType !== part.jobType) {
+          alert("Can't combine a 3D print job and a laser job into the same batch.");
+          return;
+        }
+        if ((refPart.material || "").trim().toLowerCase() !== (part.material || "").trim().toLowerCase()) {
+          alert(`These parts use different materials ("${refPart.material || "none set"}" vs "${part.material || "none set"}"). They need to match to go on the same plate or sheet.`);
+          return;
+        }
       }
     }
     selectedPartIds.add(partId);
@@ -1162,8 +1455,14 @@ async function combineSelectedIntoBatch() {
     alert("Selected parts must all be at the same stage to combine into a batch.");
     return;
   }
-  if (chosen.some((p) => p.jobType !== "print")) {
-    alert("Batching currently only supports print jobs.");
+  const jobTypes = new Set(chosen.map((p) => p.jobType));
+  if (jobTypes.size > 1) {
+    alert("Can't combine 3D print and laser jobs into the same batch.");
+    return;
+  }
+  const materials = new Set(chosen.map((p) => (p.material || "").trim().toLowerCase()));
+  if (materials.size > 1) {
+    alert("Selected parts must all use the same material to combine into a batch.");
     return;
   }
 
@@ -1278,10 +1577,12 @@ async function advanceBatch(batchId) {
   const members = queueCache.parts.filter((p) => p.batchId === batchId);
   const writeBatch = db.batch();
   let anyAdvanced = false;
+  const completedMembers = [];
   members.forEach((p) => {
     const next = NEXT_STATUS[p.status];
     if (!next) return;
     anyAdvanced = true;
+    if (next === "Complete") completedMembers.push(p);
     writeBatch.update(db.collection("parts").doc(p.id), {
       status: next,
       currentAssignee: currentUser.name,
@@ -1296,6 +1597,7 @@ async function advanceBatch(batchId) {
     });
   });
   if (anyAdvanced) await writeBatch.commit();
+  completedMembers.forEach((p) => sendMilestoneEmailForPart(p, "Complete"));
   await refreshAfterQueueMutation();
 }
 
@@ -1333,13 +1635,13 @@ function renderQueueCard(part, submission) {
   const accentColor = isLaser ? "var(--cardinal)" : "var(--navy)";
 
   const isSelected = selectedPartIds.has(part.id);
-  const selectCheckbox = (batchSelectMode && !isLaser)
+  const selectCheckbox = batchSelectMode
     ? `<div style="margin-bottom:8px;">
         <label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--slate);">
           <input type="checkbox" ${isSelected ? "checked" : ""} onchange="togglePartSelected('${part.id}')" /> Select for batch
         </label>
         ${isSelected && (part.quantity || 1) > 1 ? `<label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--slate); margin-top:6px;">
-          Qty for this plate:
+          Qty for this ${isLaser ? "sheet" : "plate"}:
           <input type="number" min="1" max="${part.quantity}" value="${selectedPartQuantities.get(part.id) || part.quantity}" style="width:56px;" onchange="setSelectedPartQty('${part.id}', this.value)" />
           <span>of ${part.quantity}</span>
         </label>` : ""}
@@ -1377,6 +1679,7 @@ function renderQueueCard(part, submission) {
           ${prevStatus ? `<button class="mini-btn plain" onclick="sendBackPart('${part.id}','${part.status}')">Send back</button>` : ""}
           ${showFlagBtn ? `<button class="mini-btn danger" onclick="openFlagForm('${part.id}')">Flag issue</button>` : ""}
           <button class="mini-btn plain" onclick="editHandoffNote('${part.id}')">Note</button>
+          <button class="mini-btn danger" onclick="withdrawPart('${part.id}')">Withdraw</button>
         </div>`}
   </div>`;
 }
@@ -1391,6 +1694,7 @@ function renderBatchBadge(part) {
 
   return `<div class="flag-note" style="background: rgba(199,182,131,0.15); color: var(--navy);">
     <b>Batch</b> · ${siblings.length + 1} parts${names.length ? " — with " + names.map((n) => escapeHtml(n)).join(", ") : ""}
+    ${part.material ? `<div class="row-sub" style="color: var(--navy);">Material: ${escapeHtml(part.material)}</div>` : ""}
     ${part.printerId ? `<div class="row-sub" style="color: var(--navy);">Machine: ${escapeHtml(machineLabel(part.printerId))}</div>` : ""}
     ${(machines.length && part.status === "Printing/Lasering") ? `<div class="form-row" style="margin-top:6px;">
       <label class="flag-form-label">Assign whole batch to machine</label>
@@ -1443,6 +1747,12 @@ async function advancePart(partId, currentStatus) {
       note: null,
     }),
   });
+
+  if (next === "Complete") {
+    const part = queueCache.parts.find((p) => p.id === partId);
+    if (part) sendMilestoneEmailForPart(part, "Complete");
+  }
+
   await refreshQueue();
 }
 
@@ -1459,6 +1769,31 @@ async function sendBackPart(partId, currentStatus) {
     }),
   });
   await refreshQueue();
+}
+
+// Escape hatch for submissions that are never going to move forward (e.g. a
+// flagged part the student never fixes). Reuses the same "quantity 0" convention
+// as a fully-split part, so it just quietly drops out of every active view
+// without needing a separate archived/deleted state.
+async function withdrawPart(partId) {
+  const part = queueCache.parts.find((p) => p.id === partId);
+  if (!part) return;
+  const sub = queueCache.submissions[part.submissionId];
+  const confirmed = confirm(`Withdraw "${sub ? sub.label : "this part"}"? This removes it from the active queue. This can't be undone from here.`);
+  if (!confirmed) return;
+
+  await db.collection("parts").doc(partId).update({
+    quantity: 0,
+    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      status: part.status,
+      timestamp: new Date().toISOString(),
+      actor: currentUser.name,
+      note: "Withdrawn by " + currentUser.name,
+    }),
+  });
+
+  sendMilestoneEmailForPart(part, "Withdrawn");
+  await refreshAfterQueueMutation();
 }
 
 async function submitFlag(partId) {
@@ -1479,6 +1814,10 @@ async function submitFlag(partId) {
       note: "Flagged: " + category + (message ? " — " + message : ""),
     }),
   });
+
+  const part = queueCache.parts.find((p) => p.id === partId);
+  if (part) sendMilestoneEmailForPart(part, "Flagged", { failureReason: category, flagMessage: message || null, actor: currentUser.name });
+
   flaggingPartId = null;
   await refreshQueue();
 }

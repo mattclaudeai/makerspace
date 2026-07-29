@@ -584,16 +584,15 @@ function renderFixForm(partId, part, submission) {
       <label class="field-label">Submission label</label>
       <input type="text" id="fix-label-${partId}" value="${escapeHtml(submission.label || "")}" />
     </div>
-    <div class="two-col">
-      <div class="form-row">
-        <label class="field-label">Quantity</label>
-        <input type="number" id="fix-quantity-${partId}" min="1" value="${part.quantity || 1}" />
-      </div>
-      <div class="form-row">
-        <label class="field-label">Color</label>
-        <input type="text" id="fix-color-${partId}" value="${escapeHtml(part.color || "")}" />
-      </div>
+    <div class="form-row">
+      <label class="field-label">Quantity</label>
+      <input type="number" id="fix-quantity-${partId}" min="1" value="${part.quantity || 1}" style="max-width:120px;" />
     </div>
+    ${!isLaser ? `<div class="form-row">
+      <label class="field-label">Ideal color</label>
+      <input type="text" id="fix-color-${partId}" value="${escapeHtml(part.color || "")}" />
+      <div class="row-sub" style="margin-top:4px;">A preference, not a guarantee.</div>
+    </div>` : ""}
     <div class="form-row">
       <label class="field-label">Material</label>
       ${materialFieldHtml}
@@ -634,7 +633,7 @@ async function resubmitFixedPart(partId) {
 
   const label = document.getElementById(`fix-label-${partId}`).value.trim();
   const quantity = parseInt(document.getElementById(`fix-quantity-${partId}`).value, 10);
-  const color = document.getElementById(`fix-color-${partId}`).value.trim();
+  const color = isLaser ? "" : document.getElementById(`fix-color-${partId}`).value.trim();
 
   let material;
   if (isLaser) {
@@ -646,7 +645,7 @@ async function resubmitFixedPart(partId) {
     material = document.getElementById(`fix-material-${partId}`).value.trim();
   }
 
-  if (!label || !material || !color || isNaN(quantity) || quantity < 1) {
+  if (!label || !material || (!isLaser && !color) || isNaN(quantity) || quantity < 1) {
     setFixStatus("error", "Please fill out all fields with valid inputs.");
     return;
   }
@@ -667,14 +666,15 @@ async function resubmitFixedPart(partId) {
     const thumbnailDataUrl = await generateThumbnail(state.fixFile, partData.jobType);
 
     setFixStatus("pending", "Uploading corrected file…");
-    const fileUrl = await uploadFileViaAppsScript(state.fixFile, partData.submissionId, partId);
+    const uploadResult = await uploadFileViaAppsScript(state.fixFile, partData.submissionId, partId);
 
     await db.collection("submissions").doc(partData.submissionId).update({ label });
     await db.collection("parts").doc(partId).update({
       quantity,
       material,
-      color,
-      fileRef: fileUrl,
+      color: color || null,
+      fileRef: uploadResult.fileUrl,
+      downloadUrl: uploadResult.downloadUrl,
       thumbnailDataUrl: thumbnailDataUrl || null,
       status: "Submitted",
       currentAssignee: null,
@@ -784,24 +784,30 @@ function renderSubmit(main) {
           <input type="number" id="f-quantity" min="1" value="1" />
         </div>
       </div>
-      <div class="two-col">
+      ${isLaser ? `
         <div class="form-row">
           <label class="field-label" id="f-material-label">Material</label>
-          ${isLaser ? `
-            <select id="f-material-select" onchange="onLaserMaterialChange()">
-              <option value="Chipboard">Chipboard</option>
-              <option value="Basswood">Basswood</option>
-              <option value="Acrylic">Acrylic</option>
-              <option value="Other">Other (describe)</option>
-            </select>
-            <input type="text" id="f-material-other" placeholder="Describe the material (e.g. 1/4in plywood, engrave only — no cut)" style="margin-top:8px; display:none;" />
-          ` : `<input type="text" id="f-material" placeholder="e.g. PLA" />`}
+          <select id="f-material-select" onchange="onLaserMaterialChange()">
+            <option value="Chipboard">Chipboard</option>
+            <option value="Basswood">Basswood</option>
+            <option value="Acrylic">Acrylic</option>
+            <option value="Other">Other (describe)</option>
+          </select>
+          <input type="text" id="f-material-other" placeholder="Describe the material (e.g. 1/4in plywood, engrave only — no cut)" style="margin-top:8px; display:none;" />
         </div>
-        <div class="form-row">
-          <label class="field-label">Color</label>
-          <input type="text" id="f-color" placeholder="e.g. Cardinal red" />
+      ` : `
+        <div class="two-col">
+          <div class="form-row">
+            <label class="field-label" id="f-material-label">Material</label>
+            <input type="text" id="f-material" placeholder="e.g. PLA" />
+          </div>
+          <div class="form-row">
+            <label class="field-label">Ideal color</label>
+            <input type="text" id="f-color" placeholder="e.g. Cardinal red" />
+            <div class="row-sub" style="margin-top:4px;">A preference, not a guarantee — we'll try to match it, but can't promise exact filament availability.</div>
+          </div>
         </div>
-      </div>
+      `}
       <div class="form-row">
         <label class="field-label" id="f-file-label">File</label>
         <input type="file" id="f-file" onchange="onFileChosen()" />
@@ -1037,9 +1043,10 @@ async function submitJob() {
     material = document.getElementById("f-material").value.trim();
   }
 
-  const color = document.getElementById("f-color").value.trim();
+  const isLaserJob = jobType === "laser";
+  const color = isLaserJob ? "" : document.getElementById("f-color").value.trim();
 
-  if (!label || !material || !color || isNaN(quantity) || quantity < 1) { 
+  if (!label || !material || (!isLaserJob && !color) || isNaN(quantity) || quantity < 1) { 
     setSubmitStatus("error", "Please fill out all fields with valid inputs."); 
     return; 
   }
@@ -1081,7 +1088,7 @@ async function submitJob() {
       jobType,
       quantity,
       material,
-      color,
+      color: color || null,
       batchable: state.submitPath === "batch",
       status: "Submitted",
       statusHistory: [{
@@ -1097,8 +1104,8 @@ async function submitJob() {
     });
 
     setSubmitStatus("pending", "Uploading file…");
-    const fileUrl = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
-    await db.collection("parts").doc(partRef.id).update({ fileRef: fileUrl });
+    const uploadResult = await uploadFileViaAppsScript(state.submitFile, submissionRef.id, partRef.id);
+    await db.collection("parts").doc(partRef.id).update({ fileRef: uploadResult.fileUrl, downloadUrl: uploadResult.downloadUrl });
 
     sendMilestoneEmail(currentUser.email, label, "Submitted"); // fire-and-forget, doesn't block the UI
 
@@ -1573,30 +1580,120 @@ async function dissolveBatch(batchId) {
   await refreshAfterQueueMutation();
 }
 
-async function advanceBatch(batchId) {
+// resultsMap is optional: { partId: succeededQty }. If omitted, every member's
+// full quantity is treated as having succeeded (the simple, common case).
+// Any member where succeeded < total gets split: the successful portion moves
+// forward on its own; the remainder is sent back one step and detached from
+// the batch so it can be re-planned (e.g. re-batched for another run) independently.
+async function advanceBatch(batchId, resultsMap = null) {
   const members = queueCache.parts.filter((p) => p.batchId === batchId);
   const writeBatch = db.batch();
-  let anyAdvanced = false;
   const completedMembers = [];
+  let anyChange = false;
+
   members.forEach((p) => {
     const next = NEXT_STATUS[p.status];
     if (!next) return;
-    anyAdvanced = true;
-    if (next === "Complete") completedMembers.push(p);
-    writeBatch.update(db.collection("parts").doc(p.id), {
+
+    const total = p.quantity || 1;
+    let succeeded = resultsMap ? resultsMap[p.id] : total;
+    if (succeeded === undefined || succeeded === null || isNaN(succeeded)) succeeded = total;
+    succeeded = Math.max(0, Math.min(succeeded, total));
+    const failed = total - succeeded;
+
+    if (succeeded === 0) {
+      // Nothing from this member succeeded — send the whole thing back one
+      // step, detached from the batch so it isn't stuck waiting on siblings.
+      const prev = PREV_STATUS[p.status] || p.status;
+      anyChange = true;
+      const updates = {
+        status: prev,
+        batchId: null,
+        statusHistory: firebase.firestore.FieldValue.arrayUnion({
+          status: prev,
+          timestamp: new Date().toISOString(),
+          actor: currentUser.name,
+          note: `0 of ${total} succeeded on this run — sent back for another attempt`,
+        }),
+      };
+      if (p.status === "Printing/Lasering") updates.printerId = null;
+      if (prev === "Submitted") updates.currentAssignee = null;
+      writeBatch.update(db.collection("parts").doc(p.id), updates);
+      return;
+    }
+
+    anyChange = true;
+
+    if (failed === 0) {
+      // Clean success — the whole member advances together, batch stays intact.
+      if (next === "Complete") completedMembers.push(p);
+      writeBatch.update(db.collection("parts").doc(p.id), {
+        status: next,
+        currentAssignee: currentUser.name,
+        failureReason: null,
+        flagMessage: null,
+        statusHistory: firebase.firestore.FieldValue.arrayUnion({
+          status: next,
+          timestamp: new Date().toISOString(),
+          actor: currentUser.name,
+          note: "Advanced as part of batch",
+        }),
+      });
+      return;
+    }
+
+    // Partial success — split. The succeeded portion becomes its own record
+    // moving forward; the remainder stays behind, sent back one step.
+    const successRef = db.collection("parts").doc();
+    writeBatch.set(successRef, {
+      submissionId: p.submissionId,
+      jobType: p.jobType,
+      quantity: succeeded,
+      material: p.material || null,
+      color: p.color || null,
+      batchable: true,
       status: next,
-      currentAssignee: currentUser.name,
-      failureReason: null,
-      flagMessage: null,
-      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+      statusHistory: [{
         status: next,
         timestamp: new Date().toISOString(),
         actor: currentUser.name,
-        note: "Advanced as part of batch",
-      }),
+        note: `${succeeded} of ${total} succeeded on this batch run`,
+      }],
+      currentAssignee: currentUser.name,
+      handoffNote: null,
+      fileRef: p.fileRef || null,
+      downloadUrl: p.downloadUrl || null,
+      thumbnailDataUrl: p.thumbnailDataUrl || null,
+      printerId: p.printerId || null,
+      batchId: null,
+      splitFromPartId: p.id,
     });
+    if (next === "Complete") completedMembers.push({ submissionId: p.submissionId });
+
+    const prev = PREV_STATUS[p.status] || p.status;
+    const failUpdates = {
+      quantity: failed,
+      batchId: null,
+      splitHistory: firebase.firestore.FieldValue.arrayUnion({
+        intoPartId: successRef.id,
+        batchId: batchId,
+        quantity: succeeded,
+        timestamp: new Date().toISOString(),
+      }),
+      status: prev,
+      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+        status: prev,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: `${succeeded} of ${total} succeeded — ${failed} sent back for another attempt`,
+      }),
+    };
+    if (p.status === "Printing/Lasering") failUpdates.printerId = null;
+    if (prev === "Submitted") failUpdates.currentAssignee = null;
+    writeBatch.update(db.collection("parts").doc(p.id), failUpdates);
   });
-  if (anyAdvanced) await writeBatch.commit();
+
+  if (anyChange) await writeBatch.commit();
   completedMembers.forEach((p) => sendMilestoneEmailForPart(p, "Complete"));
   await refreshAfterQueueMutation();
 }
@@ -1664,6 +1761,10 @@ function renderQueueCard(part, submission) {
     <span class="pill ${isLaser ? "cardinal" : "gold"}" style="margin-bottom:6px; display:inline-block;">${isLaser ? "✂ Laser" : "🖨 Print"}</span>
     <div class="queue-card-title">${escapeHtml(label)}</div>
     <div class="row-sub mono">qty ${part.quantity || 1}${part.material ? " · " + escapeHtml(part.material) : ""}</div>
+    ${part.fileRef ? `<div class="queue-actions" style="margin:6px 0 0;">
+      <a href="${part.fileRef}" target="_blank" rel="noopener" class="mini-btn plain" style="text-decoration:none;">View file</a>
+      ${part.downloadUrl ? `<a href="${part.downloadUrl}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration:none;">Download</a>` : ""}
+    </div>` : ""}
     ${(part.splitHistory && part.splitHistory.length) ? `<div class="row-sub">${part.splitHistory.reduce((s, h) => s + h.quantity, 0)} already sent to other batch${part.splitHistory.length > 1 ? "es" : ""} — ${part.quantity || 0} left to schedule</div>` : ""}
     ${part.splitFromPartId ? `<div class="row-sub">Split off from a larger request</div>` : ""}
     ${part.batchId ? renderBatchBadge(part) : ""}
@@ -1704,7 +1805,7 @@ function renderBatchBadge(part) {
       </select>
     </div>` : ""}
     <div class="queue-actions" style="margin-top:6px;">
-      <button class="mini-btn" onclick="advanceBatch('${part.batchId}')">Advance whole batch</button>
+      <button class="mini-btn" onclick="setPage('batches')">Manage batch →</button>
       <button class="mini-btn plain" onclick="removeFromBatch('${part.id}')">Remove this part</button>
     </div>
   </div>`;
@@ -1759,7 +1860,8 @@ async function advancePart(partId, currentStatus) {
 async function sendBackPart(partId, currentStatus) {
   const prev = PREV_STATUS[currentStatus];
   if (!prev) return;
-  await db.collection("parts").doc(partId).update({
+
+  const updates = {
     status: prev,
     statusHistory: firebase.firestore.FieldValue.arrayUnion({
       status: prev,
@@ -1767,7 +1869,18 @@ async function sendBackPart(partId, currentStatus) {
       actor: currentUser.name,
       note: "Sent back from " + currentStatus,
     }),
-  });
+  };
+
+  // Landing back at "Submitted" means nobody has claimed it anymore.
+  if (prev === "Submitted") {
+    updates.currentAssignee = null;
+  }
+  // Leaving the printing/lasering stage means it's not actually on that machine anymore.
+  if (currentStatus === "Printing/Lasering") {
+    updates.printerId = null;
+  }
+
+  await db.collection("parts").doc(partId).update(updates);
   await refreshQueue();
 }
 
@@ -1833,6 +1946,8 @@ async function editHandoffNote(partId) {
 /* =========================================================
    BATCHES (overview across all active batches)
 ========================================================= */
+let advancingBatchId = null;
+
 async function renderBatchesPage(main) {
   main.innerHTML = `
     <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.name)}</div>
@@ -1864,11 +1979,15 @@ async function renderBatchesPage(main) {
     const canAssignMachine = statuses.size === 1 && [...statuses][0] === "Printing/Lasering";
     const machineOptions = machinesForType(members[0].jobType);
     const currentMachine = members[0].printerId;
+    const canAdvance = statuses.size === 1 && !!NEXT_STATUS[members[0].status];
 
     const memberList = members.map((m) => {
       const sub = queueCache.submissions[m.submissionId];
-      return `${escapeHtml(sub ? sub.label : "Untitled")} (qty ${m.quantity || 1}${statuses.size > 1 ? ", " + escapeHtml(m.status) : ""})`;
+      const base = `${escapeHtml(sub ? sub.label : "Untitled")} (qty ${m.quantity || 1}${statuses.size > 1 ? ", " + escapeHtml(m.status) : ""})`;
+      return m.fileRef ? `${base} — <a href="${m.fileRef}" target="_blank" rel="noopener">file</a>` : base;
     }).join(" · ");
+
+    const isAdvancing = advancingBatchId === batchId;
 
     return `<div class="list-row" style="flex-direction:column; align-items:stretch; gap:8px;">
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1886,12 +2005,38 @@ async function renderBatchesPage(main) {
           ${machineOptions.map((m) => `<option value="${m.id}" ${currentMachine === m.id ? "selected" : ""}>${escapeHtml(m.label)}</option>`).join("")}
         </select>
       </div>` : ""}
-      <div class="queue-actions">
-        <button class="mini-btn" onclick="advanceBatch('${batchId}')">Advance whole batch</button>
+
+      ${isAdvancing ? `<div class="flag-form" style="margin-top:0;">
+        <div class="flag-form-label">How many of each succeeded on this run?</div>
+        <div class="row-sub" style="margin-bottom:10px;">Anything less than the full amount gets split off and sent back a step for another attempt — it won't hold up the pieces that did work.</div>
+        ${members.map((m) => {
+          const sub = queueCache.submissions[m.submissionId];
+          return `<div class="form-row" style="margin-bottom:8px;">
+            <label class="flag-form-label">${escapeHtml(sub ? sub.label : "Untitled")}</label>
+            <input type="number" min="0" max="${m.quantity || 1}" value="${m.quantity || 1}" id="batch-result-${batchId}-${m.id}" style="max-width:100px;" />
+            <span class="row-sub" style="display:inline;"> of ${m.quantity || 1} succeeded</span>
+          </div>`;
+        }).join("")}
+        <div class="queue-actions">
+          <button class="mini-btn" onclick="confirmBatchAdvance('${batchId}', [${members.map((m) => `'${m.id}'`).join(",")}])">Confirm</button>
+          <button class="mini-btn plain" onclick="advancingBatchId = null; renderBatchesPage(document.getElementById('main'))">Cancel</button>
+        </div>
+      </div>` : `<div class="queue-actions">
+        ${canAdvance ? `<button class="mini-btn" onclick="advancingBatchId='${batchId}'; renderBatchesPage(document.getElementById('main'))">Advance batch…</button>` : ""}
         <button class="mini-btn plain" onclick="dissolveBatch('${batchId}')">Dissolve batch</button>
-      </div>
+      </div>`}
     </div>`;
   }).join("");
+}
+
+async function confirmBatchAdvance(batchId, memberIds) {
+  const resultsMap = {};
+  memberIds.forEach((id) => {
+    const input = document.getElementById(`batch-result-${batchId}-${id}`);
+    resultsMap[id] = input ? parseInt(input.value, 10) : undefined;
+  });
+  advancingBatchId = null;
+  await advanceBatch(batchId, resultsMap);
 }
 
 /* =========================================================

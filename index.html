@@ -242,7 +242,8 @@ const NAV = {
     { key: "overview", label: "Overview", enabled: true },
     { key: "submit", label: "Submit a Job", enabled: true },
     { key: "reports", label: "Reports", enabled: false },
-    { key: "fleet", label: "Printer Fleet", enabled: false },
+    { key: "printers", label: "Printer Status", enabled: true },
+    { key: "filament", label: "Filament", enabled: true },
     { key: "roster", label: "Roster", enabled: false },
     { key: "queue", label: "Live Queue", enabled: true },
   ],
@@ -440,6 +441,7 @@ function renderMain() {
   if (state.page === "overview") return renderOverview(main);
   if (state.page === "batches") return renderBatchesPage(main);
   if (state.page === "printers") return renderPrintersPage(main);
+  if (state.page === "filament") return renderFilamentPage(main);
   main.innerHTML = `<div class="empty-hint">This page isn't built yet.</div>`;
 }
 
@@ -1287,9 +1289,11 @@ const NEXT_LABEL = {
 };
 const FLAG_CATEGORIES = ["warped", "wrong file", "wrong scale", "machine issue", "other"];
 
-// Fixed machine list for now — matches the physical fleet described in the project
-// notes. If the fleet changes, this is the one place to edit.
-const MACHINES = [
+// Printer fleet now lives in Firestore (`printers` collection) instead of a
+// hardcoded list, so teachers can add/delete machines. On first run ever
+// (empty collection) we seed it with the original fleet, using the same doc
+// IDs as before, so nothing already referencing e.g. "p1s-1" breaks.
+const DEFAULT_MACHINES_SEED = [
   { id: "p1s-1", label: "Bambu P1S #1", type: "print" },
   { id: "p1s-2", label: "Bambu P1S #2", type: "print" },
   { id: "p1s-3", label: "Bambu P1S #3", type: "print" },
@@ -1299,8 +1303,31 @@ const MACHINES = [
   { id: "jellybox", label: "Jellybox (TPU only)", type: "print" },
   { id: "laser-1", label: "Laser cutter", type: "laser" },
 ];
+
+let machinesCache = [];       // [{ id, label, type, status, pauseReason }]
+let machinesCacheLoaded = false;
+
+async function loadMachinesCache() {
+  let snap = await db.collection("printers").get();
+
+  if (snap.empty && !machinesCacheLoaded) {
+    // First run for this lab — seed the default fleet once.
+    const seedBatch = db.batch();
+    DEFAULT_MACHINES_SEED.forEach((m) => {
+      seedBatch.set(db.collection("printers").doc(m.id), {
+        label: m.label, type: m.type, status: "idle", pauseReason: null,
+      });
+    });
+    await seedBatch.commit();
+    snap = await db.collection("printers").get();
+  }
+
+  machinesCache = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  machinesCacheLoaded = true;
+}
+
 function machinesForType(jobType) {
-  return MACHINES.filter((m) => m.type === jobType);
+  return machinesCache.filter((m) => m.type === jobType);
 }
 
 let flaggingPartId = null;
@@ -1346,10 +1373,13 @@ async function loadQueueCache() {
 
   const subIds = [...new Set(parts.map(p => p.submissionId).filter(Boolean))];
   const subMap = {};
-  await Promise.all(subIds.map(async (id) => {
-    const doc = await db.collection("submissions").doc(id).get();
-    subMap[id] = doc.exists ? doc.data() : { label: "Unknown submission" };
-  }));
+  await Promise.all([
+    loadMachinesCache(),
+    ...subIds.map(async (id) => {
+      const doc = await db.collection("submissions").doc(id).get();
+      subMap[id] = doc.exists ? doc.data() : { label: "Unknown submission" };
+    }),
+  ]);
   queueCache = { parts, submissions: subMap };
 }
 
@@ -1715,7 +1745,7 @@ async function assignBatchMachine(batchId, machineId) {
 }
 
 function machineLabel(machineId) {
-  const m = MACHINES.find((m) => m.id === machineId);
+  const m = machinesCache.find((m) => m.id === machineId);
   return m ? m.label : machineId;
 }
 
@@ -1745,6 +1775,18 @@ function renderQueueCard(part, submission) {
       </div>`
     : "";
 
+  // Lets a peer leader send only part of the remaining quantity forward
+  // (e.g. 6 of 10 fit on this plate/sheet run) without touching batching at
+  // all — the rest simply stays here, unclaimed, for anyone to pick up next.
+  const canPartialAdvance = !!nextLabel && !part.batchId && (part.quantity || 1) > 1;
+  const advanceQtyControlHtml = canPartialAdvance
+    ? `<div style="margin:8px 0 2px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        <label class="row-sub" style="margin:0;">${nextLabel}:</label>
+        <input type="number" min="1" max="${part.quantity}" value="${part.quantity}" id="advance-qty-${part.id}" style="width:56px;" />
+        <span class="row-sub" style="display:inline;">of ${part.quantity} — the rest stays here, unclaimed</span>
+      </div>`
+    : "";
+
   const machineSelectHtml = (!part.batchId && machines.length && part.status === "Printing/Lasering")
     ? `<div class="form-row" style="margin:8px 0 0;">
         <label class="flag-form-label">Machine</label>
@@ -1765,7 +1807,7 @@ function renderQueueCard(part, submission) {
       <a href="${part.fileRef}" target="_blank" rel="noopener" class="mini-btn plain" style="text-decoration:none;">View file</a>
       ${part.downloadUrl ? `<a href="${part.downloadUrl}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration:none;">Download</a>` : ""}
     </div>` : ""}
-    ${(part.splitHistory && part.splitHistory.length) ? `<div class="row-sub">${part.splitHistory.reduce((s, h) => s + h.quantity, 0)} already sent to other batch${part.splitHistory.length > 1 ? "es" : ""} — ${part.quantity || 0} left to schedule</div>` : ""}
+    ${(part.splitHistory && part.splitHistory.length) ? `<div class="row-sub">${part.splitHistory.reduce((s, h) => s + h.quantity, 0)} already split off (batched or advanced separately) — ${part.quantity || 0} left here</div>` : ""}
     ${part.splitFromPartId ? `<div class="row-sub">Split off from a larger request</div>` : ""}
     ${part.batchId ? renderBatchBadge(part) : ""}
     ${flagged ? `<div class="flag-note">Flagged — ${escapeHtml(part.failureReason)}${part.flagMessage ? ": " + escapeHtml(part.flagMessage) : ""}</div>` : ""}
@@ -1775,8 +1817,10 @@ function renderQueueCard(part, submission) {
     ${machineSelectHtml}
     ${flaggingPartId === part.id
       ? renderFlagForm(part.id)
-      : `<div class="queue-actions">
-          ${nextLabel ? `<button class="mini-btn" onclick="advancePart('${part.id}','${part.status}')">${nextLabel}</button>` : ""}
+      : `${advanceQtyControlHtml}
+        <div class="queue-actions">
+          ${nextLabel && !canPartialAdvance ? `<button class="mini-btn" onclick="advancePart('${part.id}','${part.status}')">${nextLabel}</button>` : ""}
+          ${canPartialAdvance ? `<button class="mini-btn" onclick="advancePart('${part.id}','${part.status}')">Confirm</button>` : ""}
           ${prevStatus ? `<button class="mini-btn plain" onclick="sendBackPart('${part.id}','${part.status}')">Send back</button>` : ""}
           ${showFlagBtn ? `<button class="mini-btn danger" onclick="openFlagForm('${part.id}')">Flag issue</button>` : ""}
           <button class="mini-btn plain" onclick="editHandoffNote('${part.id}')">Note</button>
@@ -1836,22 +1880,90 @@ function cancelFlagForm() {
 async function advancePart(partId, currentStatus) {
   const next = NEXT_STATUS[currentStatus];
   if (!next) return;
-  await db.collection("parts").doc(partId).update({
-    status: next,
-    currentAssignee: currentUser.name,
-    failureReason: null,
-    flagMessage: null,
-    statusHistory: firebase.firestore.FieldValue.arrayUnion({
+
+  const part = queueCache.parts.find((p) => p.id === partId);
+  if (!part) return;
+  const total = part.quantity || 1;
+
+  // If this card is showing a qty-to-advance input, respect it. Otherwise
+  // (qty 1, or the card doesn't offer partial advance) the whole thing moves.
+  let qty = total;
+  const qtyInput = document.getElementById(`advance-qty-${partId}`);
+  if (qtyInput) {
+    const parsed = parseInt(qtyInput.value, 10);
+    if (!isNaN(parsed) && parsed > 0) qty = Math.min(parsed, total);
+  }
+
+  const writeBatch = db.batch();
+
+  if (qty >= total) {
+    // Whole part advances together — no split needed.
+    writeBatch.update(db.collection("parts").doc(partId), {
       status: next,
-      timestamp: new Date().toISOString(),
-      actor: currentUser.name,
-      note: null,
-    }),
-  });
+      currentAssignee: currentUser.name,
+      failureReason: null,
+      flagMessage: null,
+      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+        status: next,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: null,
+      }),
+    });
+  } else {
+    // Only `qty` of `total` is moving forward right now. Peel that amount
+    // off into its own part record advancing to the next stage; the
+    // remainder stays behind at the current stage, unassigned, so it's
+    // free for anyone (or another machine) to pick up next — independent
+    // of the batching feature entirely.
+    const remaining = total - qty;
+    const advancedRef = db.collection("parts").doc();
+    writeBatch.set(advancedRef, {
+      submissionId: part.submissionId,
+      jobType: part.jobType,
+      quantity: qty,
+      material: part.material || null,
+      color: part.color || null,
+      batchable: part.batchable || false,
+      status: next,
+      statusHistory: [{
+        status: next,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: `${qty} of ${total} moved forward — ${remaining} remain at "${currentStatus}"`,
+      }],
+      currentAssignee: currentUser.name,
+      handoffNote: null,
+      fileRef: part.fileRef || null,
+      downloadUrl: part.downloadUrl || null,
+      thumbnailDataUrl: part.thumbnailDataUrl || null,
+      printerId: null,
+      batchId: null,
+      splitFromPartId: part.id,
+    });
+
+    writeBatch.update(db.collection("parts").doc(partId), {
+      quantity: remaining,
+      currentAssignee: null,
+      printerId: null,
+      splitHistory: firebase.firestore.FieldValue.arrayUnion({
+        intoPartId: advancedRef.id,
+        quantity: qty,
+        timestamp: new Date().toISOString(),
+      }),
+      statusHistory: firebase.firestore.FieldValue.arrayUnion({
+        status: currentStatus,
+        timestamp: new Date().toISOString(),
+        actor: currentUser.name,
+        note: `Sent ${qty} of ${total} forward — ${remaining} left here for anyone to pick up`,
+      }),
+    });
+  }
+
+  await writeBatch.commit();
 
   if (next === "Complete") {
-    const part = queueCache.parts.find((p) => p.id === partId);
-    if (part) sendMilestoneEmailForPart(part, "Complete");
+    sendMilestoneEmailForPart(part, "Complete");
   }
 
   await refreshQueue();
@@ -2043,25 +2155,46 @@ async function confirmBatchAdvance(batchId, memberIds) {
    PRINTER STATUS
 ========================================================= */
 async function renderPrintersPage(main) {
+  const isTeacherView = effectiveRole() === "teacher";
   main.innerHTML = `
-    <div class="page-eyebrow">Peer Leader · ${escapeHtml(currentUser.name)}</div>
+    <div class="page-eyebrow">${isTeacherView ? "Teacher / Admin" : "Peer Leader · " + escapeHtml(currentUser.name)}</div>
     <h1 class="page-title">Printer status</h1>
     <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="renderPrintersPage(document.getElementById('main'))">Refresh</button></div>
+    ${isTeacherView ? `
+      <div class="card form-section" style="margin-bottom:20px;">
+        <h3 style="margin-top:0;">Add a printer</h3>
+        <div class="two-col">
+          <div class="form-row">
+            <label class="field-label">Name</label>
+            <input type="text" id="new-printer-label" placeholder="e.g. Bambu P1S #5" />
+          </div>
+          <div class="form-row">
+            <label class="field-label">Type</label>
+            <select id="new-printer-type">
+              <option value="print">3D Print</option>
+              <option value="laser">Laser</option>
+            </select>
+          </div>
+        </div>
+        <button class="primary-btn" onclick="addPrinter()">Add printer</button>
+        <div class="status-msg" id="add-printer-status"></div>
+      </div>
+    ` : ""}
     <div id="printers-list" class="card"><div class="empty-hint">Loading…</div></div>
   `;
 
   await loadQueueCache();
 
-  const printerDocsSnap = await db.collection("printers").get();
-  const printerStatusMap = {};
-  printerDocsSnap.docs.forEach((d) => { printerStatusMap[d.id] = d.data(); });
-
   const listEl = document.getElementById("printers-list");
   if (!listEl) return;
 
-  listEl.innerHTML = MACHINES.map((m) => {
-    const persisted = printerStatusMap[m.id] || {};
-    const isPaused = persisted.status === "paused";
+  if (machinesCache.length === 0) {
+    listEl.innerHTML = `<div class="empty-hint">No printers set up yet.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = machinesCache.map((m) => {
+    const isPaused = m.status === "paused";
     const runningPart = queueCache.parts.find((p) => p.printerId === m.id && p.status === "Printing/Lasering");
     const jobLabel = runningPart ? (queueCache.submissions[runningPart.submissionId]?.label || "Untitled job") : null;
 
@@ -2071,12 +2204,12 @@ async function renderPrintersPage(main) {
     else { stateLabel = "Idle"; toneClass = "neutral"; }
 
     const subLine = isPaused
-      ? (persisted.pauseReason ? escapeHtml(persisted.pauseReason) : "Paused for maintenance")
+      ? (m.pauseReason ? escapeHtml(m.pauseReason) : "Paused for maintenance")
       : (runningPart ? `Running: ${escapeHtml(jobLabel)} (qty ${runningPart.quantity || 1})` : "No job assigned");
 
     return `<div class="list-row">
       <div>
-        <div class="row-title">${escapeHtml(m.label)}</div>
+        <div class="row-title">${escapeHtml(m.label)} <span class="row-sub" style="text-transform:capitalize;">· ${m.type === "laser" ? "Laser" : "Print"}</span></div>
         <div class="row-sub">${subLine}</div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
@@ -2084,15 +2217,55 @@ async function renderPrintersPage(main) {
         ${isPaused
           ? `<button class="mini-btn plain" onclick="resumeMachine('${m.id}')">Resume</button>`
           : `<button class="mini-btn plain" onclick="pauseMachine('${m.id}')">Pause</button>`}
+        ${isTeacherView ? `<button class="mini-btn danger" onclick="deletePrinter('${m.id}')">Delete</button>` : ""}
       </div>
     </div>`;
   }).join("");
 }
 
+async function addPrinter() {
+  const labelInput = document.getElementById("new-printer-label");
+  const typeSelect = document.getElementById("new-printer-type");
+  const statusEl = document.getElementById("add-printer-status");
+  const setStatus = (kind, text) => { if (statusEl) { statusEl.className = "status-msg " + kind; statusEl.textContent = text; } };
+
+  const label = labelInput.value.trim();
+  const type = typeSelect.value;
+  if (!label) { setStatus("error", "Give the printer a name first."); return; }
+
+  try {
+    await db.collection("printers").add({ label, type, status: "idle", pauseReason: null });
+    labelInput.value = "";
+    await renderPrintersPage(document.getElementById("main"));
+  } catch (err) {
+    setStatus("error", "Couldn't add printer: " + err.message);
+  }
+}
+
+async function deletePrinter(machineId) {
+  const machine = machinesCache.find((m) => m.id === machineId);
+  const confirmed = confirm(`Delete "${machine ? machine.label : "this printer"}"? Any parts or batches currently assigned to it will be unassigned, not deleted.`);
+  if (!confirmed) return;
+
+  // Clean up references so nothing points at a printer that no longer exists.
+  const affectedParts = queueCache.parts.filter((p) => p.printerId === machineId);
+  const affectedBatchIds = [...new Set(affectedParts.map((p) => p.batchId).filter(Boolean))];
+
+  const writeBatch = db.batch();
+  affectedParts.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { printerId: null }));
+  affectedBatchIds.forEach((bId) => writeBatch.update(db.collection("batches").doc(bId), { printerId: null }));
+  writeBatch.delete(db.collection("printers").doc(machineId));
+  await writeBatch.commit();
+
+  await renderPrintersPage(document.getElementById("main"));
+}
+
 async function pauseMachine(machineId) {
   const reason = prompt("Reason for pausing this machine (e.g. nozzle clog, out of filament):", "");
   if (reason === null) return;
-  await db.collection("printers").doc(machineId).set({ status: "paused", pauseReason: reason || "No reason given" }, { merge: true });
+  const finalReason = reason || "No reason given";
+  await db.collection("printers").doc(machineId).set({ status: "paused", pauseReason: finalReason }, { merge: true });
+  notifyTeachersOfPrinterFlag(machineId, finalReason);
   await renderPrintersPage(document.getElementById("main"));
 }
 
@@ -2100,6 +2273,115 @@ async function resumeMachine(machineId) {
   await db.collection("printers").doc(machineId).set({ status: "idle", pauseReason: null }, { merge: true });
   await renderPrintersPage(document.getElementById("main"));
 }
+
+// Fire-and-forget: whenever a printer gets flagged/paused, let every teacher
+// on the roster know by email, including which machine, why, and who paused it.
+async function notifyTeachersOfPrinterFlag(machineId, reason) {
+  try {
+    const machine = machinesCache.find((m) => m.id === machineId);
+    const machineLabelText = machine ? machine.label : machineId;
+    const teachersSnap = await db.collection("users").where("role", "==", "teacher").get();
+    const teacherEmails = teachersSnap.docs.map((d) => d.data().email).filter(Boolean);
+
+    teacherEmails.forEach((email) => {
+      sendMilestoneEmail(email, machineLabelText, "Printer Paused", { pausedBy: currentUser.name, pauseReason: reason });
+    });
+  } catch (err) {
+    console.warn("Couldn't notify teachers of printer flag:", err);
+  }
+}
+
+/* =========================================================
+   FILAMENT INVENTORY (teacher-managed)
+========================================================= */
+async function renderFilamentPage(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Teacher / Admin</div>
+    <h1 class="page-title">Filament types</h1>
+    <div class="card form-section" style="margin-bottom:20px;">
+      <h3 style="margin-top:0;">Add a filament type</h3>
+      <div class="two-col">
+        <div class="form-row">
+          <label class="field-label">Material</label>
+          <input type="text" id="new-filament-material" placeholder="e.g. PLA" />
+        </div>
+        <div class="form-row">
+          <label class="field-label">Color</label>
+          <input type="text" id="new-filament-color" placeholder="e.g. Cardinal red" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="field-label">Starting amount (grams)</label>
+        <input type="number" id="new-filament-grams" min="0" value="1000" style="max-width:160px;" />
+      </div>
+      <button class="primary-btn" onclick="addFilamentType()">Add filament</button>
+      <div class="status-msg" id="add-filament-status"></div>
+    </div>
+    <div id="filament-list" class="card"><div class="empty-hint">Loading…</div></div>
+  `;
+
+  await refreshFilamentList();
+}
+
+async function refreshFilamentList() {
+  const listEl = document.getElementById("filament-list");
+  if (!listEl) return;
+  listEl.innerHTML = `<div class="empty-hint">Loading…</div>`;
+
+  const snap = await db.collection("filamentInventory").get();
+  const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+  if (items.length === 0) {
+    listEl.innerHTML = `<div class="empty-hint">No filament types added yet.</div>`;
+    return;
+  }
+
+  items.sort((a, b) => (a.material || "").localeCompare(b.material || "") || (a.color || "").localeCompare(b.color || ""));
+
+  listEl.innerHTML = items.map((item) => `
+    <div class="list-row">
+      <div>
+        <div class="row-title">${escapeHtml(item.material || "Unknown material")} — ${escapeHtml(item.color || "Unknown color")}</div>
+        <div class="row-sub">${(item.remainingGrams ?? 0).toLocaleString()} g remaining</div>
+      </div>
+      <button class="mini-btn danger" onclick="deleteFilamentType('${item.id}')">Delete</button>
+    </div>
+  `).join("");
+}
+
+async function addFilamentType() {
+  const materialInput = document.getElementById("new-filament-material");
+  const colorInput = document.getElementById("new-filament-color");
+  const gramsInput = document.getElementById("new-filament-grams");
+  const statusEl = document.getElementById("add-filament-status");
+  const setStatus = (kind, text) => { if (statusEl) { statusEl.className = "status-msg " + kind; statusEl.textContent = text; } };
+
+  const material = materialInput.value.trim();
+  const color = colorInput.value.trim();
+  const grams = parseInt(gramsInput.value, 10);
+
+  if (!material || !color) { setStatus("error", "Fill in both material and color."); return; }
+  if (isNaN(grams) || grams < 0) { setStatus("error", "Enter a valid starting amount in grams."); return; }
+
+  try {
+    await db.collection("filamentInventory").add({
+      material, color, remainingGrams: grams,
+      lastRestockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    materialInput.value = ""; colorInput.value = ""; gramsInput.value = "1000";
+    await refreshFilamentList();
+  } catch (err) {
+    setStatus("error", "Couldn't add filament type: " + err.message);
+  }
+}
+
+async function deleteFilamentType(itemId) {
+  const confirmed = confirm("Delete this filament type? This can't be undone.");
+  if (!confirmed) return;
+  await db.collection("filamentInventory").doc(itemId).delete();
+  await refreshFilamentList();
+}
+
 </script>
 </body>
 </html>

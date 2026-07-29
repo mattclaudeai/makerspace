@@ -452,6 +452,8 @@ async function renderHome(main) {
     <div class="card" id="submissions-list"><div class="empty-hint">Loading…</div></div>
   `;
 
+  await loadFilamentTypesCache();
+
   let snap;
   try {
     // Filter only (no orderBy) so this doesn't require a Firestore composite index —
@@ -576,7 +578,11 @@ function renderFixForm(partId, part, submission) {
         ${["Chipboard", "Basswood", "Acrylic", "Other"].map((m) => `<option value="${m}" ${part.material === m ? "selected" : (m === "Other" && !["Chipboard","Basswood","Acrylic"].includes(part.material) ? "selected" : "")}>${m === "Other" ? "Other (describe)" : m}</option>`).join("")}
       </select>
       <input type="text" id="fix-material-other-${partId}" placeholder="Describe the material" value="${!["Chipboard","Basswood","Acrylic"].includes(part.material) ? escapeHtml(part.material || "") : ""}" style="margin-top:8px; ${["Chipboard","Basswood","Acrylic"].includes(part.material) ? "display:none;" : ""}" />`
-    : `<input type="text" id="fix-material-${partId}" value="${escapeHtml(part.material || "")}" />`;
+    : (filamentTypesCache.length === 0
+        ? `<select id="fix-material-${partId}" disabled><option value="">No filament types set up yet</option></select>`
+        : `<select id="fix-material-${partId}">
+            ${filamentTypesCache.map((f) => `<option value="${escapeHtml(f.name)}" ${part.material === f.name ? "selected" : ""}>${escapeHtml(f.name)}</option>`).join("")}
+          </select>`);
 
   return `<div class="flag-form" style="margin-top:0;">
     <div class="flag-form-label">Fix & resubmit</div>
@@ -702,7 +708,7 @@ async function resubmitFixedPart(partId) {
 /* =========================================================
    SUBMIT PAGE
 ========================================================= */
-function renderSubmit(main) {
+async function renderSubmit(main) {
   const paths = [
     { key: "solo", title: "Solo, student-sliced", tag: "Default", body: "Upload the .3mf you've already sliced in Bambu Studio." },
     { key: "batch", title: "Add to batch", tag: "Non-urgent", body: "Upload a raw STL. A peer leader will combine it with others." },
@@ -731,6 +737,10 @@ function renderSubmit(main) {
   }
 
   const isLaser = state.submitJobType === "laser";
+
+  if (!isLaser) {
+    await loadFilamentTypesCache();
+  }
 
   if (isLaser) {
     state.submitPath = "solo"; // laser has one path, not three
@@ -801,7 +811,13 @@ function renderSubmit(main) {
         <div class="two-col">
           <div class="form-row">
             <label class="field-label" id="f-material-label">Material</label>
-            <input type="text" id="f-material" placeholder="e.g. PLA" />
+            ${filamentTypesCache.length === 0
+              ? `<select id="f-material" disabled><option value="">No filament types set up yet</option></select>
+                 <div class="row-sub" style="margin-top:4px;">Ask your teacher to add filament types before you can submit a print.</div>`
+              : `<select id="f-material">
+                  ${filamentTypesCache.map((f) => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.name)}</option>`).join("")}
+                </select>`
+            }
           </div>
           <div class="form-row">
             <label class="field-label">Ideal color</label>
@@ -816,7 +832,7 @@ function renderSubmit(main) {
         <div class="file-drop" id="file-drop-hint">No file selected yet</div>
       </div>
       <div class="form-row">
-        <button class="primary-btn" id="submit-btn" onclick="submitJob()">Submit job</button>
+        <button class="primary-btn" id="submit-btn" onclick="submitJob()" ${!isLaser && filamentTypesCache.length === 0 ? "disabled" : ""}>Submit job</button>
       </div>
       <div class="status-msg" id="submit-status"></div>
     </div>
@@ -2292,29 +2308,33 @@ async function notifyTeachersOfPrinterFlag(machineId, reason) {
 }
 
 /* =========================================================
-   FILAMENT INVENTORY (teacher-managed)
+   FILAMENT TYPES (teacher-managed list, used as the print
+   submission material dropdown — not a per-roll/gram tracker)
 ========================================================= */
+let filamentTypesCache = [];       // [{ id, name }]
+let filamentTypesCacheLoaded = false;
+
+async function loadFilamentTypesCache(force = false) {
+  if (filamentTypesCacheLoaded && !force) return;
+  const snap = await db.collection("filamentInventory").get();
+  filamentTypesCache = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  filamentTypesCacheLoaded = true;
+}
+
 async function renderFilamentPage(main) {
   main.innerHTML = `
     <div class="page-eyebrow">Teacher / Admin</div>
     <h1 class="page-title">Filament types</h1>
+    <p class="row-sub" style="margin-bottom:16px;">This is the list of filament types students can choose from when submitting a 3D print job — not a per-roll inventory, just the type names (e.g. PLA, PETG, TPU, ABS, ASA).</p>
     <div class="card form-section" style="margin-bottom:20px;">
       <h3 style="margin-top:0;">Add a filament type</h3>
-      <div class="two-col">
-        <div class="form-row">
-          <label class="field-label">Material</label>
-          <input type="text" id="new-filament-material" placeholder="e.g. PLA" />
-        </div>
-        <div class="form-row">
-          <label class="field-label">Color</label>
-          <input type="text" id="new-filament-color" placeholder="e.g. Cardinal red" />
-        </div>
-      </div>
       <div class="form-row">
-        <label class="field-label">Starting amount (grams)</label>
-        <input type="number" id="new-filament-grams" min="0" value="1000" style="max-width:160px;" />
+        <label class="field-label">Type name</label>
+        <input type="text" id="new-filament-name" placeholder="e.g. PLA" />
       </div>
-      <button class="primary-btn" onclick="addFilamentType()">Add filament</button>
+      <button class="primary-btn" onclick="addFilamentType()">Add filament type</button>
       <div class="status-msg" id="add-filament-status"></div>
     </div>
     <div id="filament-list" class="card"><div class="empty-hint">Loading…</div></div>
@@ -2328,47 +2348,35 @@ async function refreshFilamentList() {
   if (!listEl) return;
   listEl.innerHTML = `<div class="empty-hint">Loading…</div>`;
 
-  const snap = await db.collection("filamentInventory").get();
-  const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  await loadFilamentTypesCache(true);
 
-  if (items.length === 0) {
-    listEl.innerHTML = `<div class="empty-hint">No filament types added yet.</div>`;
+  if (filamentTypesCache.length === 0) {
+    listEl.innerHTML = `<div class="empty-hint">No filament types added yet — students won't be able to submit a print job until at least one is added.</div>`;
     return;
   }
 
-  items.sort((a, b) => (a.material || "").localeCompare(b.material || "") || (a.color || "").localeCompare(b.color || ""));
-
-  listEl.innerHTML = items.map((item) => `
+  listEl.innerHTML = filamentTypesCache.map((item) => `
     <div class="list-row">
-      <div>
-        <div class="row-title">${escapeHtml(item.material || "Unknown material")} — ${escapeHtml(item.color || "Unknown color")}</div>
-        <div class="row-sub">${(item.remainingGrams ?? 0).toLocaleString()} g remaining</div>
-      </div>
+      <div class="row-title">${escapeHtml(item.name || "Untitled")}</div>
       <button class="mini-btn danger" onclick="deleteFilamentType('${item.id}')">Delete</button>
     </div>
   `).join("");
 }
 
 async function addFilamentType() {
-  const materialInput = document.getElementById("new-filament-material");
-  const colorInput = document.getElementById("new-filament-color");
-  const gramsInput = document.getElementById("new-filament-grams");
+  const nameInput = document.getElementById("new-filament-name");
   const statusEl = document.getElementById("add-filament-status");
   const setStatus = (kind, text) => { if (statusEl) { statusEl.className = "status-msg " + kind; statusEl.textContent = text; } };
 
-  const material = materialInput.value.trim();
-  const color = colorInput.value.trim();
-  const grams = parseInt(gramsInput.value, 10);
+  const name = nameInput.value.trim();
+  if (!name) { setStatus("error", "Enter a filament type name."); return; }
 
-  if (!material || !color) { setStatus("error", "Fill in both material and color."); return; }
-  if (isNaN(grams) || grams < 0) { setStatus("error", "Enter a valid starting amount in grams."); return; }
+  const duplicate = filamentTypesCache.some((f) => (f.name || "").toLowerCase() === name.toLowerCase());
+  if (duplicate) { setStatus("error", `"${name}" is already in the list.`); return; }
 
   try {
-    await db.collection("filamentInventory").add({
-      material, color, remainingGrams: grams,
-      lastRestockedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    materialInput.value = ""; colorInput.value = ""; gramsInput.value = "1000";
+    await db.collection("filamentInventory").add({ name });
+    nameInput.value = "";
     await refreshFilamentList();
   } catch (err) {
     setStatus("error", "Couldn't add filament type: " + err.message);
@@ -2376,7 +2384,7 @@ async function addFilamentType() {
 }
 
 async function deleteFilamentType(itemId) {
-  const confirmed = confirm("Delete this filament type? This can't be undone.");
+  const confirmed = confirm("Delete this filament type? Students will no longer be able to select it for new submissions.");
   if (!confirmed) return;
   await db.collection("filamentInventory").doc(itemId).delete();
   await refreshFilamentList();

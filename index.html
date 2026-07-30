@@ -256,24 +256,14 @@ const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "T
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged((user) => {
     if (!user) {
-      // Not signed in yet — kick off anonymous sign-in.
-      // onAuthStateChanged will fire again once it completes.
       auth.signInAnonymously().catch((err) => {
         console.error("Anonymous sign-in failed:", err);
         showLoginError("Couldn't connect to the login service. Please refresh and try again.");
       });
       return;
     }
-
-    const session = localStorage.getItem("lab_user_session");
-    if (session) {
-      try {
-        const u = JSON.parse(session);
-        loadUserSession(u);
-      } catch (e) {
-        localStorage.removeItem("lab_user_session");
-      }
-    }
+    // No session persistence by design — shared lab computers always show
+    // the login screen and require a fresh Student ID entry.
   });
 });
 
@@ -324,6 +314,7 @@ async function signInWithStudentNumber(event) {
     const userData = userDoc.data();
 
     // Session object cached locally
+    // In-memory only for this page load — no localStorage persistence.
     const sessionObj = {
       studentNumber: sNum,
       name: userData.name || `Student ${sNum}`,
@@ -331,7 +322,6 @@ async function signInWithStudentNumber(event) {
       role: userData.role || "student"
     };
 
-    localStorage.setItem("lab_user_session", JSON.stringify(sessionObj));
     loadUserSession(sessionObj);
   } catch (err) {
     showLoginError("Login failed: " + err.message);
@@ -354,7 +344,6 @@ function loadUserSession(u) {
 }
 
 function signOutUser() {
-  localStorage.removeItem("lab_user_session");
   currentUser = null;
   document.getElementById("app-screen").classList.remove("visible");
   document.getElementById("login-screen").style.display = "flex";

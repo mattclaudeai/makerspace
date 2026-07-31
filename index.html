@@ -621,7 +621,7 @@ function renderFixForm(partId, part, submission) {
     </div>
     <div class="form-row">
       <label class="field-label">Corrected file</label>
-      <input type="file" id="fix-file-${partId}" accept="${isLaser ? ".ai,.pdf" : ".3mf,.stl"}" onchange="onFixFileChosen('${partId}')" />
+      <input type="file" id="fix-file-${partId}" accept="${isLaser ? ".ai,.dxf" : ".3mf,.stl"}" onchange="onFixFileChosen('${partId}')" />
       <div class="file-drop" id="fix-file-hint-${partId}">No file selected yet</div>
     </div>
     <div class="queue-actions">
@@ -677,9 +677,9 @@ async function resubmitFixedPart(partId) {
   }
 
   const fileName = state.fixFile.name.toLowerCase();
-  const allowedExts = isLaser ? ['.ai', '.pdf'] : ['.3mf', '.stl'];
+  const allowedExts = isLaser ? ['.ai', '.dxf'] : ['.3mf', '.stl'];
   if (!allowedExts.some((ext) => fileName.endsWith(ext))) {
-    setFixStatus("error", isLaser ? "Upload an .ai or .pdf file." : "Upload a .3mf or .stl file.");
+    setFixStatus("error", isLaser ? "Upload an .ai or .dxf file." : "Upload a .3mf or .stl file.");
     return;
   }
 
@@ -743,7 +743,7 @@ async function renderSubmit(main) {
         </button>
         <button class="path-card" onclick="selectJobType('laser')">
           <h3>✂ Laser cut / engrave</h3>
-          <p>Upload an <code>.ai</code> (or <code>.pdf</code>) file to be cut or engraved on the laser.</p>
+          <p>Upload an <code>.ai</code> (or <code>.dxf</code>) file to be cut or engraved on the laser.</p>
         </button>
       </div>
     `;
@@ -763,7 +763,7 @@ async function renderSubmit(main) {
   let pathBanner = "";
   if (isLaser) {
     pathBanner = `<div class="flag-note" style="background: rgba(139,35,49,0.08); color: var(--cardinal); margin-bottom: 16px;">
-      <b>Laser file:</b> upload your <code>.ai</code> file (or a <code>.pdf</code> if that's what you have). Cut lines must be
+      <b>Laser file:</b> upload your <code>.ai</code> file (or a <code>.dxf</code> if that's what you have). Cut lines must be
       <b>0.05pt stroke, pure red</b>; anything to be engraved must be a <b>solid black fill</b> — the laser software reads these
       colors to know what to do, so double check them in Illustrator before uploading.
     </div>`;
@@ -889,8 +889,8 @@ function updateFileFieldsForJobType() {
     fileLabel.textContent = "File (.3mf preferred, .stl accepted)";
     materialLabel.textContent = "Material (e.g. PLA, TPU)";
   } else {
-    fileInput.accept = ".ai,.pdf";
-    fileLabel.textContent = "File (.ai preferred, .pdf accepted)";
+    fileInput.accept = ".ai,.dxf";
+    fileLabel.textContent = "File (.ai preferred, .dxf accepted)";
     materialLabel.textContent = "Material";
   }
 }
@@ -933,7 +933,7 @@ async function generateThumbnail(file, jobType) {
 
     const name = file.name.toLowerCase();
     if (name.endsWith(".3mf")) return await withTimeout(thumbnailFrom3mf(file));
-    if (name.endsWith(".pdf") || name.endsWith(".ai")) return await withTimeout(thumbnailFromPdf(file));
+    if (name.endsWith(".dxf") || name.endsWith(".ai")) return await withTimeout(thumbnailFromPdf(file));
     if (name.endsWith(".stl")) {
       if (file.size > STL_THUMB_SIZE_LIMIT_BYTES) return null; // too big to safely render client-side
       return await withTimeout(thumbnailFromStl(file));
@@ -990,7 +990,7 @@ async function thumbnailFrom3mf(file) {
   });
 }
 
-// Laser files: .pdf directly, or .ai saved with "Create PDF Compatible File" (Illustrator's
+// Laser files: .dxf directly, or .ai saved with "Create PDF Compatible File" (Illustrator's
 // default), which makes the .ai valid PDF under the hood. Renders page 1 to a canvas.
 async function thumbnailFromPdf(file) {
   if (typeof pdfjsLib === "undefined") return null;
@@ -1089,14 +1089,14 @@ async function submitJob() {
 
   const fileName = state.submitFile.name.toLowerCase();
   const allowedPrintExts = ['.3mf', '.stl'];
-  const allowedLaserExts = ['.ai', '.pdf'];
+  const allowedLaserExts = ['.ai', '.dxf'];
   
   if (jobType === "print" && !allowedPrintExts.some(ext => fileName.endsWith(ext))) {
     setSubmitStatus("error", "Invalid file format for 3D Prints. Upload a .3mf or .stl file.");
     return;
   }
   if (jobType === "laser" && !allowedLaserExts.some(ext => fileName.endsWith(ext))) {
-    setSubmitStatus("error", "Invalid file format for Laser. Upload an .ai or .pdf file.");
+    setSubmitStatus("error", "Invalid file format for Laser. Upload an .ai or .dxf file.");
     return;
   }
 

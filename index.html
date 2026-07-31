@@ -126,6 +126,26 @@
   .row-with-thumb { display: flex; align-items: center; gap: 14px; }
   .queue-thumb { width: 100%; height: 90px; object-fit: cover; border-radius: 6px; background: #EEEBE2; margin-bottom: 8px; display: block; }
   .queue-thumb-fallback { width: 100%; height: 48px; border-radius: 6px; background: #EEEBE2; margin-bottom: 8px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--slate-light); text-transform: uppercase; }
+
+  /* --- REPORTS --- */
+  .report-section { margin-bottom: 24px; }
+  .report-section-title { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .report-section-sub { font-size: 12px; color: var(--slate-light); margin: 0 0 14px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 4px; }
+  .stat-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--paper); }
+  .stat-value { font-size: 22px; font-weight: 700; font-family: 'Space Grotesk', sans-serif; color: var(--navy); }
+  .stat-label { font-size: 11px; color: var(--slate); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .report-bar-row { display: grid; grid-template-columns: 120px 1fr 56px; gap: 10px; align-items: center; padding: 6px 0; }
+  .report-bar-row + .report-bar-row { border-top: 1px solid var(--border); }
+  .report-bar-label { font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .report-bar-track { height: 10px; border-radius: 999px; background: #EFEDE5; overflow: hidden; }
+  .report-bar-fill { height: 100%; border-radius: 999px; background: var(--gold-deep); }
+  .report-bar-fill.cardinal { background: var(--cardinal); }
+  .report-bar-fill.navy { background: var(--navy); }
+  .report-bar-count { font-size: 12px; color: var(--slate); text-align: right; }
+  .report-table-head { display: grid; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--slate-light); padding: 10px 20px; border-bottom: 1px solid var(--border); }
+  .report-table-row { display: grid; padding: 12px 20px; font-size: 13px; align-items: center; }
+  .report-table-row + .report-table-row { border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -242,7 +262,7 @@ const NAV = {
   teacher: [
     { key: "overview", label: "Overview", enabled: true },
     { key: "submit", label: "Submit a Job", enabled: true },
-    { key: "reports", label: "Reports", enabled: false },
+    { key: "reports", label: "Reports", enabled: true },
     { key: "printers", label: "Printer Status", enabled: true },
     { key: "filament", label: "Filament", enabled: true },
     { key: "roster", label: "Roster", enabled: true },
@@ -431,6 +451,7 @@ function renderMain() {
   if (state.page === "submit") return renderSubmit(main);
   if (state.page === "queue") return renderQueue(main);
   if (state.page === "overview") return renderOverview(main);
+  if (state.page === "reports") return renderReportsPage(main);
   if (state.page === "batches") return renderBatchesPage(main);
   if (state.page === "printers") return renderPrintersPage(main);
   if (state.page === "filament") return renderFilamentPage(main);
@@ -1345,6 +1366,219 @@ function formatBytes(bytes) {
   const mb = bytes / (1024 * 1024);
   if (mb < 1024) return mb.toFixed(1) + " MB";
   return (mb / 1024).toFixed(2) + " GB";
+}
+
+/* =========================================================
+   REPORTS (TEACHER)
+   Pulls every submission + part once and derives three views:
+   volume & turnaround, material usage, and printer utilization.
+   All computed client-side from data already on hand elsewhere in
+   the app — no new Firestore fields required.
+========================================================= */
+const REPORT_DONE_STATUSES = ["Complete", "Picked up"];
+
+async function renderReportsPage(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Teacher / Admin</div>
+    <h1 class="page-title">Reports</h1>
+    <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="renderReportsPage(document.getElementById('main'))">Refresh</button></div>
+    <div id="reports-body"><div class="empty-hint">Crunching numbers…</div></div>
+  `;
+
+  let submissions, parts;
+  try {
+    const [submissionsSnap, partsSnap] = await Promise.all([
+      db.collection("submissions").get(),
+      db.collection("parts").get(),
+      loadMachinesCache(),
+    ]);
+    submissions = submissionsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    parts = partsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (err) {
+    document.getElementById("reports-body").innerHTML =
+      `<div class="empty-hint">Couldn't load report data: ${escapeHtml(err.message)}</div>`;
+    return;
+  }
+
+  const body = document.getElementById("reports-body");
+  body.innerHTML = [
+    renderVolumeTurnaroundSection(submissions, parts),
+    renderMaterialUsageSection(parts),
+    renderPrinterUtilizationSection(parts),
+  ].join("");
+}
+
+/* ---- Volume & turnaround ---- */
+
+function statusHistoryTimestamp(part, statuses) {
+  if (!Array.isArray(part.statusHistory)) return null;
+  const hit = part.statusHistory.find((h) => statuses.includes(h.status));
+  return hit ? new Date(hit.timestamp) : null;
+}
+
+function formatDuration(ms) {
+  if (ms == null || isNaN(ms) || ms < 0) return "—";
+  const hours = ms / (1000 * 60 * 60);
+  if (hours < 1) return Math.round(ms / (1000 * 60)) + " min";
+  if (hours < 48) return hours.toFixed(1) + " hrs";
+  return (hours / 24).toFixed(1) + " days";
+}
+
+function renderVolumeTurnaroundSection(submissions, parts) {
+  const activeParts = parts.filter((p) => (p.quantity ?? 1) > 0);
+  const doneParts = activeParts.filter((p) => REPORT_DONE_STATUSES.includes(p.status));
+  const completionRate = activeParts.length
+    ? Math.round((doneParts.length / activeParts.length) * 100)
+    : 0;
+
+  // Turnaround only counts parts that carry their own "Submitted" entry —
+  // parts peeled off by a split or batch advance don't have one, so they're
+  // excluded here rather than reported with a misleading start time.
+  const turnaroundMs = [];
+  doneParts.forEach((p) => {
+    const start = statusHistoryTimestamp(p, ["Submitted"]);
+    const end = statusHistoryTimestamp(p, REPORT_DONE_STATUSES);
+    if (start && end && end >= start) turnaroundMs.push(end - start);
+  });
+  const avgTurnaround = turnaroundMs.length
+    ? turnaroundMs.reduce((a, b) => a + b, 0) / turnaroundMs.length
+    : null;
+
+  // Submissions per day, last 14 days.
+  const days = [];
+  const now = new Date();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    days.push(d);
+  }
+  const counts = days.map((d) => {
+    const next = new Date(d);
+    next.setDate(next.getDate() + 1);
+    return submissions.filter((s) => {
+      const t = s.createdAt?.toDate ? s.createdAt.toDate() : (s.createdAt ? new Date(s.createdAt) : null);
+      return t && t >= d && t < next;
+    }).length;
+  });
+  const maxCount = Math.max(1, ...counts);
+
+  const last7 = submissions.filter((s) => {
+    const t = s.createdAt?.toDate ? s.createdAt.toDate() : (s.createdAt ? new Date(s.createdAt) : null);
+    return t && (now - t) <= 7 * 24 * 60 * 60 * 1000;
+  }).length;
+
+  return `<div class="report-section">
+    <h3 class="report-section-title">Volume &amp; turnaround</h3>
+    <p class="report-section-sub">Turnaround is measured Submitted → Complete/Picked up, and only counts parts that weren't split or batched off along the way.</p>
+    <div class="stat-grid" style="margin-bottom:20px;">
+      <div class="stat-card"><div class="stat-value">${submissions.length}</div><div class="stat-label">Total submissions</div></div>
+      <div class="stat-card"><div class="stat-value">${last7}</div><div class="stat-label">Submissions, last 7 days</div></div>
+      <div class="stat-card"><div class="stat-value">${completionRate}%</div><div class="stat-label">Parts complete or picked up</div></div>
+      <div class="stat-card"><div class="stat-value">${avgTurnaround != null ? formatDuration(avgTurnaround) : "—"}</div><div class="stat-label">Avg. turnaround${turnaroundMs.length ? ` (n=${turnaroundMs.length})` : ""}</div></div>
+    </div>
+    <div class="card" style="padding:16px 20px;">
+      ${days.map((d, i) => `<div class="report-bar-row">
+        <div class="report-bar-label">${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
+        <div class="report-bar-track"><div class="report-bar-fill navy" style="width:${(counts[i] / maxCount) * 100}%;"></div></div>
+        <div class="report-bar-count">${counts[i]}</div>
+      </div>`).join("")}
+    </div>
+  </div>`;
+}
+
+/* ---- Material usage ---- */
+
+function renderMaterialUsageSection(parts) {
+  const activeParts = parts.filter((p) => (p.quantity ?? 1) > 0);
+
+  function summarize(jobType) {
+    const map = {};
+    activeParts.filter((p) => p.jobType === jobType).forEach((p) => {
+      const key = (p.material || "Unspecified").trim() || "Unspecified";
+      if (!map[key]) map[key] = { inQueue: 0, completed: 0 };
+      const qty = p.quantity || 1;
+      if (REPORT_DONE_STATUSES.includes(p.status)) map[key].completed += qty;
+      else map[key].inQueue += qty;
+    });
+    return Object.entries(map)
+      .map(([material, v]) => ({ material, total: v.inQueue + v.completed, ...v }))
+      .sort((a, b) => b.total - a.total);
+  }
+
+  const printMaterials = summarize("print");
+  const laserMaterials = summarize("laser");
+
+  function renderTable(rows, accentClass) {
+    if (rows.length === 0) return `<div class="empty-hint">No submissions yet.</div>`;
+    const maxTotal = Math.max(1, ...rows.map((r) => r.total));
+    return rows.map((r) => `<div class="report-bar-row" style="grid-template-columns: 140px 1fr 130px;">
+      <div class="report-bar-label">${escapeHtml(r.material)}</div>
+      <div class="report-bar-track"><div class="report-bar-fill ${accentClass}" style="width:${(r.total / maxTotal) * 100}%;"></div></div>
+      <div class="report-bar-count">${r.completed} done · ${r.inQueue} in queue</div>
+    </div>`).join("");
+  }
+
+  return `<div class="report-section">
+    <h3 class="report-section-title">Material usage</h3>
+    <p class="report-section-sub">Counted in units (quantity), not grams — filament weight isn't tracked per job yet.</p>
+    <div class="two-col" style="align-items:start;">
+      <div class="card" style="padding:16px 20px;">
+        <div class="row-title" style="margin-bottom:10px;">🖨 3D print — by filament type</div>
+        ${renderTable(printMaterials, "gold")}
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div class="row-title" style="margin-bottom:10px;">✂ Laser — by material</div>
+        ${renderTable(laserMaterials, "cardinal")}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---- Printer utilization ---- */
+
+function renderPrinterUtilizationSection(parts) {
+  if (machinesCache.length === 0) {
+    return `<div class="report-section">
+      <h3 class="report-section-title">Printer utilization</h3>
+      <div class="card"><div class="empty-hint">No printers set up yet.</div></div>
+    </div>`;
+  }
+
+  const rows = machinesCache.map((m) => {
+    const onMachine = parts.filter((p) => p.printerId === m.id);
+    const completedUnits = onMachine
+      .filter((p) => REPORT_DONE_STATUSES.includes(p.status))
+      .reduce((sum, p) => sum + (p.quantity || 1), 0);
+    const runningPart = onMachine.find((p) => p.status === "Printing/Lasering" && (p.quantity ?? 1) > 0);
+    return { machine: m, completedUnits, running: !!runningPart };
+  });
+  const maxUnits = Math.max(1, ...rows.map((r) => r.completedUnits));
+
+  return `<div class="report-section">
+    <h3 class="report-section-title">Printer utilization</h3>
+    <p class="report-section-sub">Completed units per machine, all-time. Status reflects the printer's current state on the Printer Status page.</p>
+    <div class="card" style="padding:0;">
+      <div class="report-table-head" style="grid-template-columns: 1fr 1fr 120px;">
+        <div>Machine</div>
+        <div>Completed units</div>
+        <div>Status</div>
+      </div>
+      ${rows.map((r) => {
+        const isPaused = r.machine.status === "paused";
+        const stateLabel = isPaused ? "Paused" : (r.running ? "Running" : "Idle");
+        const tone = isPaused ? "cardinal" : (r.running ? "gold" : "neutral");
+        return `<div class="report-table-row" style="grid-template-columns: 1fr 1fr 120px;">
+          <div>${escapeHtml(r.machine.label)} <span class="row-sub" style="text-transform:capitalize;">· ${r.machine.type === "laser" ? "Laser" : "Print"}</span></div>
+          <div class="report-bar-row" style="grid-template-columns: 1fr 50px; padding:0;">
+            <div class="report-bar-track"><div class="report-bar-fill navy" style="width:${(r.completedUnits / maxUnits) * 100}%;"></div></div>
+            <div class="report-bar-count">${r.completedUnits}</div>
+          </div>
+          <div><span class="pill ${tone}">${stateLabel}</span></div>
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`;
 }
 
 /* =========================================================

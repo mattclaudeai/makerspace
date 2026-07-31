@@ -126,26 +126,6 @@
   .row-with-thumb { display: flex; align-items: center; gap: 14px; }
   .queue-thumb { width: 100%; height: 90px; object-fit: cover; border-radius: 6px; background: #EEEBE2; margin-bottom: 8px; display: block; }
   .queue-thumb-fallback { width: 100%; height: 48px; border-radius: 6px; background: #EEEBE2; margin-bottom: 8px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--slate-light); text-transform: uppercase; }
-
-  /* --- REPORTS --- */
-  .report-section { margin-bottom: 24px; }
-  .report-section-title { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
-  .report-section-sub { font-size: 12px; color: var(--slate-light); margin: 0 0 14px; }
-  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 4px; }
-  .stat-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--paper); }
-  .stat-value { font-size: 22px; font-weight: 700; font-family: 'Space Grotesk', sans-serif; color: var(--navy); }
-  .stat-label { font-size: 11px; color: var(--slate); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
-  .report-bar-row { display: grid; grid-template-columns: 120px 1fr 56px; gap: 10px; align-items: center; padding: 6px 0; }
-  .report-bar-row + .report-bar-row { border-top: 1px solid var(--border); }
-  .report-bar-label { font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .report-bar-track { height: 10px; border-radius: 999px; background: #EFEDE5; overflow: hidden; }
-  .report-bar-fill { height: 100%; border-radius: 999px; background: var(--gold-deep); }
-  .report-bar-fill.cardinal { background: var(--cardinal); }
-  .report-bar-fill.navy { background: var(--navy); }
-  .report-bar-count { font-size: 12px; color: var(--slate); text-align: right; }
-  .report-table-head { display: grid; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--slate-light); padding: 10px 20px; border-bottom: 1px solid var(--border); }
-  .report-table-row { display: grid; padding: 12px 20px; font-size: 13px; align-items: center; }
-  .report-table-row + .report-table-row { border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -262,7 +242,7 @@ const NAV = {
   teacher: [
     { key: "overview", label: "Overview", enabled: true },
     { key: "submit", label: "Submit a Job", enabled: true },
-    { key: "reports", label: "Reports", enabled: true },
+    { key: "reports", label: "Reports", enabled: false },
     { key: "printers", label: "Printer Status", enabled: true },
     { key: "filament", label: "Filament", enabled: true },
     { key: "roster", label: "Roster", enabled: true },
@@ -451,7 +431,6 @@ function renderMain() {
   if (state.page === "submit") return renderSubmit(main);
   if (state.page === "queue") return renderQueue(main);
   if (state.page === "overview") return renderOverview(main);
-  if (state.page === "reports") return renderReportsPage(main);
   if (state.page === "batches") return renderBatchesPage(main);
   if (state.page === "printers") return renderPrintersPage(main);
   if (state.page === "filament") return renderFilamentPage(main);
@@ -621,7 +600,7 @@ function renderFixForm(partId, part, submission) {
     </div>
     <div class="form-row">
       <label class="field-label">Corrected file</label>
-      <input type="file" id="fix-file-${partId}" accept="${isLaser ? ".ai,.dxf" : ".3mf,.stl"}" onchange="onFixFileChosen('${partId}')" />
+      <input type="file" id="fix-file-${partId}" accept="${isLaser ? ".ai,.pdf" : ".3mf,.stl"}" onchange="onFixFileChosen('${partId}')" />
       <div class="file-drop" id="fix-file-hint-${partId}">No file selected yet</div>
     </div>
     <div class="queue-actions">
@@ -677,9 +656,9 @@ async function resubmitFixedPart(partId) {
   }
 
   const fileName = state.fixFile.name.toLowerCase();
-  const allowedExts = isLaser ? ['.ai', '.dxf'] : ['.3mf', '.stl'];
+  const allowedExts = isLaser ? ['.ai', '.pdf'] : ['.3mf', '.stl'];
   if (!allowedExts.some((ext) => fileName.endsWith(ext))) {
-    setFixStatus("error", isLaser ? "Upload an .ai or .dxf file." : "Upload a .3mf or .stl file.");
+    setFixStatus("error", isLaser ? "Upload an .ai or .pdf file." : "Upload a .3mf or .stl file.");
     return;
   }
 
@@ -743,7 +722,7 @@ async function renderSubmit(main) {
         </button>
         <button class="path-card" onclick="selectJobType('laser')">
           <h3>✂ Laser cut / engrave</h3>
-          <p>Upload an <code>.ai</code> (or <code>.dxf</code>) file to be cut or engraved on the laser.</p>
+          <p>Upload an <code>.ai</code> (or <code>.pdf</code>) file to be cut or engraved on the laser.</p>
         </button>
       </div>
     `;
@@ -763,7 +742,7 @@ async function renderSubmit(main) {
   let pathBanner = "";
   if (isLaser) {
     pathBanner = `<div class="flag-note" style="background: rgba(139,35,49,0.08); color: var(--cardinal); margin-bottom: 16px;">
-      <b>Laser file:</b> upload your <code>.ai</code> file (or a <code>.dxf</code> if that's what you have). Cut lines must be
+      <b>Laser file:</b> upload your <code>.ai</code> file (or a <code>.pdf</code> if that's what you have). Cut lines must be
       <b>0.05pt stroke, pure red</b>; anything to be engraved must be a <b>solid black fill</b> — the laser software reads these
       colors to know what to do, so double check them in Illustrator before uploading.
     </div>`;
@@ -889,8 +868,8 @@ function updateFileFieldsForJobType() {
     fileLabel.textContent = "File (.3mf preferred, .stl accepted)";
     materialLabel.textContent = "Material (e.g. PLA, TPU)";
   } else {
-    fileInput.accept = ".ai,.dxf";
-    fileLabel.textContent = "File (.ai preferred, .dxf accepted)";
+    fileInput.accept = ".ai,.pdf";
+    fileLabel.textContent = "File (.ai preferred, .pdf accepted)";
     materialLabel.textContent = "Material";
   }
 }
@@ -933,7 +912,7 @@ async function generateThumbnail(file, jobType) {
 
     const name = file.name.toLowerCase();
     if (name.endsWith(".3mf")) return await withTimeout(thumbnailFrom3mf(file));
-    if (name.endsWith(".dxf") || name.endsWith(".ai")) return await withTimeout(thumbnailFromPdf(file));
+    if (name.endsWith(".pdf") || name.endsWith(".ai")) return await withTimeout(thumbnailFromPdf(file));
     if (name.endsWith(".stl")) {
       if (file.size > STL_THUMB_SIZE_LIMIT_BYTES) return null; // too big to safely render client-side
       return await withTimeout(thumbnailFromStl(file));
@@ -990,7 +969,7 @@ async function thumbnailFrom3mf(file) {
   });
 }
 
-// Laser files: .dxf directly, or .ai saved with "Create PDF Compatible File" (Illustrator's
+// Laser files: .pdf directly, or .ai saved with "Create PDF Compatible File" (Illustrator's
 // default), which makes the .ai valid PDF under the hood. Renders page 1 to a canvas.
 async function thumbnailFromPdf(file) {
   if (typeof pdfjsLib === "undefined") return null;
@@ -1089,14 +1068,14 @@ async function submitJob() {
 
   const fileName = state.submitFile.name.toLowerCase();
   const allowedPrintExts = ['.3mf', '.stl'];
-  const allowedLaserExts = ['.ai', '.dxf'];
+  const allowedLaserExts = ['.ai', '.pdf'];
   
   if (jobType === "print" && !allowedPrintExts.some(ext => fileName.endsWith(ext))) {
     setSubmitStatus("error", "Invalid file format for 3D Prints. Upload a .3mf or .stl file.");
     return;
   }
   if (jobType === "laser" && !allowedLaserExts.some(ext => fileName.endsWith(ext))) {
-    setSubmitStatus("error", "Invalid file format for Laser. Upload an .ai or .dxf file.");
+    setSubmitStatus("error", "Invalid file format for Laser. Upload an .ai or .pdf file.");
     return;
   }
 
@@ -1223,6 +1202,82 @@ async function sendMilestoneEmailForPart(part, status, extra = {}) {
   if (email) sendMilestoneEmail(email, sub.label || "Your job", status, extra);
 }
 
+/* =========================================================
+   IN-PAGE MODAL (replaces window.alert/confirm/prompt)
+   Native browser dialogs get silently blocked when this page is embedded
+   in an iframe without "allow-modals" in its sandbox attribute — which is
+   exactly what happens when this is embedded in a Google Site. Clicking
+   "Pause" (or Delete/Withdraw/add a note, etc.) would call prompt()/confirm()
+   and nothing would happen, with no error either. These functions render an
+   equivalent UI directly in the page instead, so it works the same whether
+   the app is opened standalone or embedded.
+========================================================= */
+function showModal({ title, bodyHtml, buttons }) {
+  closeModal();
+  const overlay = document.createElement("div");
+  overlay.id = "custom-modal-overlay";
+  overlay.style.cssText = "position:fixed; inset:0; background:rgba(8,22,39,0.55); display:flex; align-items:center; justify-content:center; z-index:1000; padding:20px;";
+  overlay.innerHTML = `
+    <div style="background:var(--paper); border-radius:12px; padding:24px; width:380px; max-width:100%;" onclick="event.stopPropagation()">
+      ${title ? `<h3 style="margin:0 0 14px; font-size:16px;">${escapeHtml(title)}</h3>` : ""}
+      ${bodyHtml}
+      <div class="queue-actions" style="margin-top:18px; justify-content:flex-end;">
+        ${buttons.map((b, i) => `<button class="${b.primary ? (b.danger ? "mini-btn danger" : "mini-btn") : "mini-btn plain"}" id="modal-btn-${i}" style="padding:8px 14px; font-size:13px;">${escapeHtml(b.label)}</button>`).join("")}
+      </div>
+    </div>
+  `;
+  overlay.addEventListener("click", closeModal); // click on the dim backdrop cancels, same as clicking outside a native dialog
+  document.body.appendChild(overlay);
+  buttons.forEach((b, i) => { document.getElementById(`modal-btn-${i}`).onclick = b.onClick; });
+  return overlay;
+}
+
+function closeModal() {
+  const el = document.getElementById("custom-modal-overlay");
+  if (el) el.remove();
+}
+
+// Drop-in for alert(message) — just needs acknowledging, doesn't return anything.
+function showAlertModal(message) {
+  showModal({
+    bodyHtml: `<p class="row-sub" style="margin:0; color:var(--ink);">${escapeHtml(message)}</p>`,
+    buttons: [{ label: "OK", primary: true, onClick: closeModal }],
+  });
+}
+
+// Drop-in for confirm(message) — onConfirm only fires if they hit Confirm, matching `if (!confirm(...)) return;`.
+function showConfirmModal(message, onConfirm) {
+  showModal({
+    bodyHtml: `<p class="row-sub" style="margin:0; color:var(--ink);">${escapeHtml(message)}</p>`,
+    buttons: [
+      { label: "Cancel", primary: false, onClick: closeModal },
+      { label: "Confirm", primary: true, danger: true, onClick: () => { closeModal(); onConfirm(); } },
+    ],
+  });
+}
+
+// Drop-in for prompt(label, defaultValue) — onSubmit only fires on Save, matching `if (value === null) return;`.
+function showPromptModal({ title, label, defaultValue = "", placeholder = "", multiline = false }, onSubmit) {
+  const inputId = "modal-prompt-input";
+  const fieldHtml = multiline
+    ? `<textarea id="${inputId}" rows="3" placeholder="${escapeHtml(placeholder)}" style="width:100%; font-family:'Inter'; font-size:14px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; resize:vertical;">${escapeHtml(defaultValue)}</textarea>`
+    : `<input type="text" id="${inputId}" value="${escapeHtml(defaultValue)}" placeholder="${escapeHtml(placeholder)}" style="width:100%;" />`;
+
+  showModal({
+    title,
+    bodyHtml: `<label class="field-label" style="display:block; margin-bottom:6px;">${escapeHtml(label)}</label>${fieldHtml}`,
+    buttons: [
+      { label: "Cancel", primary: false, onClick: closeModal },
+      { label: "Save", primary: true, onClick: () => {
+          const val = document.getElementById(inputId).value;
+          closeModal();
+          onSubmit(val);
+        } },
+    ],
+  });
+  setTimeout(() => document.getElementById(inputId)?.focus(), 50);
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -1290,219 +1345,6 @@ function formatBytes(bytes) {
   const mb = bytes / (1024 * 1024);
   if (mb < 1024) return mb.toFixed(1) + " MB";
   return (mb / 1024).toFixed(2) + " GB";
-}
-
-/* =========================================================
-   REPORTS (TEACHER)
-   Pulls every submission + part once and derives three views:
-   volume & turnaround, material usage, and printer utilization.
-   All computed client-side from data already on hand elsewhere in
-   the app — no new Firestore fields required.
-========================================================= */
-const REPORT_DONE_STATUSES = ["Complete", "Picked up"];
-
-async function renderReportsPage(main) {
-  main.innerHTML = `
-    <div class="page-eyebrow">Teacher / Admin</div>
-    <h1 class="page-title">Reports</h1>
-    <div style="margin-bottom:16px;"><button class="secondary-btn" onclick="renderReportsPage(document.getElementById('main'))">Refresh</button></div>
-    <div id="reports-body"><div class="empty-hint">Crunching numbers…</div></div>
-  `;
-
-  let submissions, parts;
-  try {
-    const [submissionsSnap, partsSnap] = await Promise.all([
-      db.collection("submissions").get(),
-      db.collection("parts").get(),
-      loadMachinesCache(),
-    ]);
-    submissions = submissionsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    parts = partsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch (err) {
-    document.getElementById("reports-body").innerHTML =
-      `<div class="empty-hint">Couldn't load report data: ${escapeHtml(err.message)}</div>`;
-    return;
-  }
-
-  const body = document.getElementById("reports-body");
-  body.innerHTML = [
-    renderVolumeTurnaroundSection(submissions, parts),
-    renderMaterialUsageSection(parts),
-    renderPrinterUtilizationSection(parts),
-  ].join("");
-}
-
-/* ---- Volume & turnaround ---- */
-
-function statusHistoryTimestamp(part, statuses) {
-  if (!Array.isArray(part.statusHistory)) return null;
-  const hit = part.statusHistory.find((h) => statuses.includes(h.status));
-  return hit ? new Date(hit.timestamp) : null;
-}
-
-function formatDuration(ms) {
-  if (ms == null || isNaN(ms) || ms < 0) return "—";
-  const hours = ms / (1000 * 60 * 60);
-  if (hours < 1) return Math.round(ms / (1000 * 60)) + " min";
-  if (hours < 48) return hours.toFixed(1) + " hrs";
-  return (hours / 24).toFixed(1) + " days";
-}
-
-function renderVolumeTurnaroundSection(submissions, parts) {
-  const activeParts = parts.filter((p) => (p.quantity ?? 1) > 0);
-  const doneParts = activeParts.filter((p) => REPORT_DONE_STATUSES.includes(p.status));
-  const completionRate = activeParts.length
-    ? Math.round((doneParts.length / activeParts.length) * 100)
-    : 0;
-
-  // Turnaround only counts parts that carry their own "Submitted" entry —
-  // parts peeled off by a split or batch advance don't have one, so they're
-  // excluded here rather than reported with a misleading start time.
-  const turnaroundMs = [];
-  doneParts.forEach((p) => {
-    const start = statusHistoryTimestamp(p, ["Submitted"]);
-    const end = statusHistoryTimestamp(p, REPORT_DONE_STATUSES);
-    if (start && end && end >= start) turnaroundMs.push(end - start);
-  });
-  const avgTurnaround = turnaroundMs.length
-    ? turnaroundMs.reduce((a, b) => a + b, 0) / turnaroundMs.length
-    : null;
-
-  // Submissions per day, last 14 days.
-  const days = [];
-  const now = new Date();
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - i);
-    days.push(d);
-  }
-  const counts = days.map((d) => {
-    const next = new Date(d);
-    next.setDate(next.getDate() + 1);
-    return submissions.filter((s) => {
-      const t = s.createdAt?.toDate ? s.createdAt.toDate() : (s.createdAt ? new Date(s.createdAt) : null);
-      return t && t >= d && t < next;
-    }).length;
-  });
-  const maxCount = Math.max(1, ...counts);
-
-  const last7 = submissions.filter((s) => {
-    const t = s.createdAt?.toDate ? s.createdAt.toDate() : (s.createdAt ? new Date(s.createdAt) : null);
-    return t && (now - t) <= 7 * 24 * 60 * 60 * 1000;
-  }).length;
-
-  return `<div class="report-section">
-    <h3 class="report-section-title">Volume &amp; turnaround</h3>
-    <p class="report-section-sub">Turnaround is measured Submitted → Complete/Picked up, and only counts parts that weren't split or batched off along the way.</p>
-    <div class="stat-grid" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-value">${submissions.length}</div><div class="stat-label">Total submissions</div></div>
-      <div class="stat-card"><div class="stat-value">${last7}</div><div class="stat-label">Submissions, last 7 days</div></div>
-      <div class="stat-card"><div class="stat-value">${completionRate}%</div><div class="stat-label">Parts complete or picked up</div></div>
-      <div class="stat-card"><div class="stat-value">${avgTurnaround != null ? formatDuration(avgTurnaround) : "—"}</div><div class="stat-label">Avg. turnaround${turnaroundMs.length ? ` (n=${turnaroundMs.length})` : ""}</div></div>
-    </div>
-    <div class="card" style="padding:16px 20px;">
-      ${days.map((d, i) => `<div class="report-bar-row">
-        <div class="report-bar-label">${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
-        <div class="report-bar-track"><div class="report-bar-fill navy" style="width:${(counts[i] / maxCount) * 100}%;"></div></div>
-        <div class="report-bar-count">${counts[i]}</div>
-      </div>`).join("")}
-    </div>
-  </div>`;
-}
-
-/* ---- Material usage ---- */
-
-function renderMaterialUsageSection(parts) {
-  const activeParts = parts.filter((p) => (p.quantity ?? 1) > 0);
-
-  function summarize(jobType) {
-    const map = {};
-    activeParts.filter((p) => p.jobType === jobType).forEach((p) => {
-      const key = (p.material || "Unspecified").trim() || "Unspecified";
-      if (!map[key]) map[key] = { inQueue: 0, completed: 0 };
-      const qty = p.quantity || 1;
-      if (REPORT_DONE_STATUSES.includes(p.status)) map[key].completed += qty;
-      else map[key].inQueue += qty;
-    });
-    return Object.entries(map)
-      .map(([material, v]) => ({ material, total: v.inQueue + v.completed, ...v }))
-      .sort((a, b) => b.total - a.total);
-  }
-
-  const printMaterials = summarize("print");
-  const laserMaterials = summarize("laser");
-
-  function renderTable(rows, accentClass) {
-    if (rows.length === 0) return `<div class="empty-hint">No submissions yet.</div>`;
-    const maxTotal = Math.max(1, ...rows.map((r) => r.total));
-    return rows.map((r) => `<div class="report-bar-row" style="grid-template-columns: 140px 1fr 130px;">
-      <div class="report-bar-label">${escapeHtml(r.material)}</div>
-      <div class="report-bar-track"><div class="report-bar-fill ${accentClass}" style="width:${(r.total / maxTotal) * 100}%;"></div></div>
-      <div class="report-bar-count">${r.completed} done · ${r.inQueue} in queue</div>
-    </div>`).join("");
-  }
-
-  return `<div class="report-section">
-    <h3 class="report-section-title">Material usage</h3>
-    <p class="report-section-sub">Counted in units (quantity), not grams — filament weight isn't tracked per job yet.</p>
-    <div class="two-col" style="align-items:start;">
-      <div class="card" style="padding:16px 20px;">
-        <div class="row-title" style="margin-bottom:10px;">🖨 3D print — by filament type</div>
-        ${renderTable(printMaterials, "gold")}
-      </div>
-      <div class="card" style="padding:16px 20px;">
-        <div class="row-title" style="margin-bottom:10px;">✂ Laser — by material</div>
-        ${renderTable(laserMaterials, "cardinal")}
-      </div>
-    </div>
-  </div>`;
-}
-
-/* ---- Printer utilization ---- */
-
-function renderPrinterUtilizationSection(parts) {
-  if (machinesCache.length === 0) {
-    return `<div class="report-section">
-      <h3 class="report-section-title">Printer utilization</h3>
-      <div class="card"><div class="empty-hint">No printers set up yet.</div></div>
-    </div>`;
-  }
-
-  const rows = machinesCache.map((m) => {
-    const onMachine = parts.filter((p) => p.printerId === m.id);
-    const completedUnits = onMachine
-      .filter((p) => REPORT_DONE_STATUSES.includes(p.status))
-      .reduce((sum, p) => sum + (p.quantity || 1), 0);
-    const runningPart = onMachine.find((p) => p.status === "Printing/Lasering" && (p.quantity ?? 1) > 0);
-    return { machine: m, completedUnits, running: !!runningPart };
-  });
-  const maxUnits = Math.max(1, ...rows.map((r) => r.completedUnits));
-
-  return `<div class="report-section">
-    <h3 class="report-section-title">Printer utilization</h3>
-    <p class="report-section-sub">Completed units per machine, all-time. Status reflects the printer's current state on the Printer Status page.</p>
-    <div class="card" style="padding:0;">
-      <div class="report-table-head" style="grid-template-columns: 1fr 1fr 120px;">
-        <div>Machine</div>
-        <div>Completed units</div>
-        <div>Status</div>
-      </div>
-      ${rows.map((r) => {
-        const isPaused = r.machine.status === "paused";
-        const stateLabel = isPaused ? "Paused" : (r.running ? "Running" : "Idle");
-        const tone = isPaused ? "cardinal" : (r.running ? "gold" : "neutral");
-        return `<div class="report-table-row" style="grid-template-columns: 1fr 1fr 120px;">
-          <div>${escapeHtml(r.machine.label)} <span class="row-sub" style="text-transform:capitalize;">· ${r.machine.type === "laser" ? "Laser" : "Print"}</span></div>
-          <div class="report-bar-row" style="grid-template-columns: 1fr 50px; padding:0;">
-            <div class="report-bar-track"><div class="report-bar-fill navy" style="width:${(r.completedUnits / maxUnits) * 100}%;"></div></div>
-            <div class="report-bar-count">${r.completedUnits}</div>
-          </div>
-          <div><span class="pill ${tone}">${stateLabel}</span></div>
-        </div>`;
-      }).join("")}
-    </div>
-  </div>`;
 }
 
 /* =========================================================
@@ -1695,15 +1537,15 @@ function togglePartSelected(partId) {
       const refPart = queueCache.parts.find((p) => p.id === [...selectedPartIds][0]);
       if (refPart) {
         if (refPart.status !== part.status) {
-          alert(`These parts aren't at the same stage. Pick parts that are all currently "${refPart.status}."`);
+          showAlertModal(`These parts aren't at the same stage. Pick parts that are all currently "${refPart.status}."`);
           return;
         }
         if (refPart.jobType !== part.jobType) {
-          alert("Can't combine a 3D print job and a laser job into the same batch.");
+          showAlertModal("Can't combine a 3D print job and a laser job into the same batch.");
           return;
         }
         if ((refPart.material || "").trim().toLowerCase() !== (part.material || "").trim().toLowerCase()) {
-          alert(`These parts use different materials ("${refPart.material || "none set"}" vs "${part.material || "none set"}"). They need to match to go on the same plate or sheet.`);
+          showAlertModal(`These parts use different materials ("${refPart.material || "none set"}" vs "${part.material || "none set"}"). They need to match to go on the same plate or sheet.`);
           return;
         }
       }
@@ -1732,17 +1574,17 @@ async function combineSelectedIntoBatch() {
   const chosen = ids.map((id) => queueCache.parts.find((p) => p.id === id)).filter(Boolean);
   const statuses = new Set(chosen.map((p) => p.status));
   if (statuses.size > 1) {
-    alert("Selected parts must all be at the same stage to combine into a batch.");
+    showAlertModal("Selected parts must all be at the same stage to combine into a batch.");
     return;
   }
   const jobTypes = new Set(chosen.map((p) => p.jobType));
   if (jobTypes.size > 1) {
-    alert("Can't combine 3D print and laser jobs into the same batch.");
+    showAlertModal("Can't combine 3D print and laser jobs into the same batch.");
     return;
   }
   const materials = new Set(chosen.map((p) => (p.material || "").trim().toLowerCase()));
   if (materials.size > 1) {
-    alert("Selected parts must all use the same material to combine into a batch.");
+    showAlertModal("Selected parts must all use the same material to combine into a batch.");
     return;
   }
 
@@ -2247,26 +2089,29 @@ async function withdrawPart(partId) {
   const part = queueCache.parts.find((p) => p.id === partId);
   if (!part) return;
   const sub = queueCache.submissions[part.submissionId];
-  const confirmed = confirm(`Withdraw "${sub ? sub.label : "this part"}"? This removes it from the active queue. This can't be undone from here.`);
-  if (!confirmed) return;
 
-  await db.collection("parts").doc(partId).update({
-    quantity: 0,
-    statusHistory: firebase.firestore.FieldValue.arrayUnion({
-      status: part.status,
-      timestamp: new Date().toISOString(),
-      actor: currentUser.name,
-      note: "Withdrawn by " + currentUser.name,
-    }),
-  });
+  showConfirmModal(
+    `Withdraw "${sub ? sub.label : "this part"}"? This removes it from the active queue. This can't be undone from here.`,
+    async () => {
+      await db.collection("parts").doc(partId).update({
+        quantity: 0,
+        statusHistory: firebase.firestore.FieldValue.arrayUnion({
+          status: part.status,
+          timestamp: new Date().toISOString(),
+          actor: currentUser.name,
+          note: "Withdrawn by " + currentUser.name,
+        }),
+      });
 
-  sendMilestoneEmailForPart(part, "Withdrawn");
-  await refreshAfterQueueMutation();
+      sendMilestoneEmailForPart(part, "Withdrawn");
+      await refreshAfterQueueMutation();
+    }
+  );
 }
 
 async function submitFlag(partId) {
   const checked = document.querySelector(`input[name="flag-cat-${partId}"]:checked`);
-  if (!checked) { alert("Choose a reason category first."); return; }
+  if (!checked) { showAlertModal("Choose a reason category first."); return; }
   const category = checked.value;
   const message = document.getElementById(`flag-msg-${partId}`).value.trim();
 
@@ -2292,10 +2137,13 @@ async function submitFlag(partId) {
 
 async function editHandoffNote(partId) {
   const part = queueCache.parts.find((p) => p.id === partId);
-  const note = prompt("Handoff note for the next peer leader:", part?.handoffNote || "");
-  if (note === null) return;
-  await db.collection("parts").doc(partId).update({ handoffNote: note });
-  await refreshQueue();
+  showPromptModal(
+    { title: "Handoff note", label: "Handoff note for the next peer leader:", defaultValue: part?.handoffNote || "", multiline: true },
+    async (note) => {
+      await db.collection("parts").doc(partId).update({ handoffNote: note });
+      await refreshQueue();
+    }
+  );
 }
 
 /* =========================================================
@@ -2487,29 +2335,35 @@ async function addPrinter() {
 
 async function deletePrinter(machineId) {
   const machine = machinesCache.find((m) => m.id === machineId);
-  const confirmed = confirm(`Delete "${machine ? machine.label : "this printer"}"? Any parts or batches currently assigned to it will be unassigned, not deleted.`);
-  if (!confirmed) return;
 
-  // Clean up references so nothing points at a printer that no longer exists.
-  const affectedParts = queueCache.parts.filter((p) => p.printerId === machineId);
-  const affectedBatchIds = [...new Set(affectedParts.map((p) => p.batchId).filter(Boolean))];
+  showConfirmModal(
+    `Delete "${machine ? machine.label : "this printer"}"? Any parts or batches currently assigned to it will be unassigned, not deleted.`,
+    async () => {
+      // Clean up references so nothing points at a printer that no longer exists.
+      const affectedParts = queueCache.parts.filter((p) => p.printerId === machineId);
+      const affectedBatchIds = [...new Set(affectedParts.map((p) => p.batchId).filter(Boolean))];
 
-  const writeBatch = db.batch();
-  affectedParts.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { printerId: null }));
-  affectedBatchIds.forEach((bId) => writeBatch.update(db.collection("batches").doc(bId), { printerId: null }));
-  writeBatch.delete(db.collection("printers").doc(machineId));
-  await writeBatch.commit();
+      const writeBatch = db.batch();
+      affectedParts.forEach((p) => writeBatch.update(db.collection("parts").doc(p.id), { printerId: null }));
+      affectedBatchIds.forEach((bId) => writeBatch.update(db.collection("batches").doc(bId), { printerId: null }));
+      writeBatch.delete(db.collection("printers").doc(machineId));
+      await writeBatch.commit();
 
-  await renderPrintersPage(document.getElementById("main"));
+      await renderPrintersPage(document.getElementById("main"));
+    }
+  );
 }
 
 async function pauseMachine(machineId) {
-  const reason = prompt("Reason for pausing this machine (e.g. nozzle clog, out of filament):", "");
-  if (reason === null) return;
-  const finalReason = reason || "No reason given";
-  await db.collection("printers").doc(machineId).set({ status: "paused", pauseReason: finalReason }, { merge: true });
-  notifyTeachersOfPrinterFlag(machineId, finalReason);
-  await renderPrintersPage(document.getElementById("main"));
+  showPromptModal(
+    { title: "Pause machine", label: "Reason for pausing this machine (e.g. nozzle clog, out of filament):", placeholder: "Reason…" },
+    async (reason) => {
+      const finalReason = (reason || "").trim() || "No reason given";
+      await db.collection("printers").doc(machineId).set({ status: "paused", pauseReason: finalReason }, { merge: true });
+      notifyTeachersOfPrinterFlag(machineId, finalReason);
+      await renderPrintersPage(document.getElementById("main"));
+    }
+  );
 }
 
 async function resumeMachine(machineId) {
@@ -2611,10 +2465,13 @@ async function addFilamentType() {
 }
 
 async function deleteFilamentType(itemId) {
-  const confirmed = confirm("Delete this filament type? Students will no longer be able to select it for new submissions.");
-  if (!confirmed) return;
-  await db.collection("filamentInventory").doc(itemId).delete();
-  await refreshFilamentList();
+  showConfirmModal(
+    "Delete this filament type? Students will no longer be able to select it for new submissions.",
+    async () => {
+      await db.collection("filamentInventory").doc(itemId).delete();
+      await refreshFilamentList();
+    }
+  );
 }
 
 /* =========================================================
@@ -2805,10 +2662,13 @@ async function editRosterRole(userId, newRole) {
 
 async function deleteRosterUser(userId) {
   const user = rosterCache.find((u) => u.id === userId);
-  const confirmed = confirm(`Delete ${user ? user.name : "this student"} from the roster? Their past submissions stay in the queue history, but they won't be able to log in anymore.`);
-  if (!confirmed) return;
-  await db.collection("users").doc(userId).delete();
-  await refreshRosterList();
+  showConfirmModal(
+    `Delete ${user ? user.name : "this student"} from the roster? Their past submissions stay in the queue history, but they won't be able to log in anymore.`,
+    async () => {
+      await db.collection("users").doc(userId).delete();
+      await refreshRosterList();
+    }
+  );
 }
 
 /* ---- CSV mass import ---- */

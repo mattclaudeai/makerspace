@@ -2522,12 +2522,12 @@ function renderRosterList() {
         <div class="row-sub">${escapeHtml(u.email || "No email on file")}${u.classPeriod ? " · " + escapeHtml(u.classPeriod) : ""}</div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
-        <select onchange="editRosterRole('${u.id}', this.value)" ${isSelf ? "disabled title=\\"Can't change your own role here\\"" : ""}>
+        <select onchange="editRosterRole('${u.id}', this.value)" ${isSelf ? "disabled title='Cannot change your own role here'" : ""}>
           <option value="student" ${(u.role || "student") === "student" ? "selected" : ""}>Student</option>
           <option value="peer_leader" ${u.role === "peer_leader" ? "selected" : ""}>Peer Leader</option>
           <option value="teacher" ${u.role === "teacher" ? "selected" : ""}>Teacher / Admin</option>
         </select>
-        <button class="mini-btn danger" onclick="deleteRosterUser('${u.id}')" ${isSelf ? "disabled title=\\"Can't delete your own account while logged in\\"" : ""}>Delete</button>
+        <button class="mini-btn danger" onclick="deleteRosterUser('${u.id}')" ${isSelf ? "disabled title='Cannot delete your own account while logged in'" : ""}>Delete</button>
       </div>
     </div>`;
   }).join("");

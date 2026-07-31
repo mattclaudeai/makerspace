@@ -193,6 +193,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
 <script>
 /* =========================================================
@@ -244,7 +245,7 @@ const NAV = {
     { key: "reports", label: "Reports", enabled: false },
     { key: "printers", label: "Printer Status", enabled: true },
     { key: "filament", label: "Filament", enabled: true },
-    { key: "roster", label: "Roster", enabled: false },
+    { key: "roster", label: "Roster", enabled: true },
     { key: "queue", label: "Live Queue", enabled: true },
   ],
 };
@@ -256,6 +257,8 @@ const ROLE_LABEL = { student: "Student", peer_leader: "Peer Leader", teacher: "T
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged((user) => {
     if (!user) {
+      // Not signed in yet — kick off anonymous sign-in.
+      // onAuthStateChanged will fire again once it completes.
       auth.signInAnonymously().catch((err) => {
         console.error("Anonymous sign-in failed:", err);
         showLoginError("Couldn't connect to the login service. Please refresh and try again.");
@@ -263,7 +266,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
     // No session persistence by design — shared lab computers always show
-    // the login screen and require a fresh Student ID entry.
+    // the login screen and require a fresh Student ID entry every load.
   });
 });
 
@@ -313,8 +316,8 @@ async function signInWithStudentNumber(event) {
 
     const userData = userDoc.data();
 
-    // Session object cached locally
-    // In-memory only for this page load — no localStorage persistence.
+    // In-memory only for this page load — no localStorage persistence, so
+    // shared lab computers never carry a session over to the next student.
     const sessionObj = {
       studentNumber: sNum,
       name: userData.name || `Student ${sNum}`,
@@ -431,6 +434,7 @@ function renderMain() {
   if (state.page === "batches") return renderBatchesPage(main);
   if (state.page === "printers") return renderPrintersPage(main);
   if (state.page === "filament") return renderFilamentPage(main);
+  if (state.page === "roster") return renderRosterPage(main);
   main.innerHTML = `<div class="empty-hint">This page isn't built yet.</div>`;
 }
 
@@ -2377,6 +2381,324 @@ async function deleteFilamentType(itemId) {
   if (!confirmed) return;
   await db.collection("filamentInventory").doc(itemId).delete();
   await refreshFilamentList();
+}
+
+/* =========================================================
+   ROSTER (TEACHER) — view/edit/delete students, plus CSV mass import
+   for teachers who don't have access to the source Google Sheet.
+   New/imported students are written with the Student ID Number as the
+   Firestore doc ID, matching how login already looks students up
+   (db.collection("users").doc(studentNumber)).
+========================================================= */
+let rosterCache = [];          // [{ id, name, email, role, studentNumber, classPeriod }]
+let rosterCacheLoaded = false;
+let rosterFilterRole = "all";
+let rosterSearchTerm = "";
+let rosterCsvRows = null;      // parsed+validated preview rows, or null when not mid-import
+let rosterCsvErrors = [];
+const ROSTER_VALID_ROLES = ["student", "peer_leader", "teacher"];
+
+async function loadRosterCache(force = false) {
+  if (rosterCacheLoaded && !force) return;
+  const snap = await db.collection("users").get();
+  rosterCache = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  rosterCacheLoaded = true;
+}
+
+async function renderRosterPage(main) {
+  main.innerHTML = `
+    <div class="page-eyebrow">Teacher / Admin</div>
+    <h1 class="page-title">Roster</h1>
+
+    <div class="card form-section" style="margin-bottom:20px;">
+      <h3 style="margin-top:0;">Add a student</h3>
+      <div class="two-col">
+        <div class="form-row">
+          <label class="field-label">Student ID Number</label>
+          <input type="text" id="new-student-number" placeholder="e.g. 123456" />
+        </div>
+        <div class="form-row">
+          <label class="field-label">Name</label>
+          <input type="text" id="new-student-name" placeholder="e.g. Jamie Rivera" />
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="form-row">
+          <label class="field-label">Email</label>
+          <input type="text" id="new-student-email" placeholder="e.g. jrivera@mc.edu" />
+        </div>
+        <div class="form-row">
+          <label class="field-label">Role</label>
+          <select id="new-student-role">
+            <option value="student">Student</option>
+            <option value="peer_leader">Peer Leader</option>
+            <option value="teacher">Teacher / Admin</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="field-label">Class period (optional)</label>
+        <input type="text" id="new-student-period" placeholder="e.g. 3rd period" style="max-width:200px;" />
+      </div>
+      <button class="primary-btn" onclick="addStudentSingle()">Add student</button>
+      <div class="status-msg" id="add-student-status"></div>
+    </div>
+
+    <div class="card form-section" style="margin-bottom:20px;">
+      <h3 style="margin-top:0;">Mass import from CSV</h3>
+      <p class="row-sub" style="margin-bottom:12px;">
+        Columns expected: <code>studentNumber</code>, <code>name</code>, <code>email</code>, <code>role</code>
+        (optional, defaults to "student"), <code>classPeriod</code> (optional). First row should be a header row.
+        Importing a Student ID that already exists updates that student instead of duplicating them.
+      </p>
+      <input type="file" id="roster-csv-file" accept=".csv" onchange="onRosterCsvChosen()" />
+      <div id="roster-csv-preview" style="margin-top:16px;"></div>
+    </div>
+
+    <div class="card form-section" style="margin-bottom:20px;">
+      <div class="two-col">
+        <div class="form-row">
+          <label class="field-label">Search</label>
+          <input type="text" id="roster-search" placeholder="Name, ID, or email…" value="${escapeHtml(rosterSearchTerm)}" oninput="onRosterSearchInput(this.value)" />
+        </div>
+        <div class="form-row">
+          <label class="field-label">Filter by role</label>
+          <select id="roster-role-filter" onchange="onRosterRoleFilterChange(this.value)">
+            <option value="all" ${rosterFilterRole === "all" ? "selected" : ""}>All roles</option>
+            <option value="student" ${rosterFilterRole === "student" ? "selected" : ""}>Student</option>
+            <option value="peer_leader" ${rosterFilterRole === "peer_leader" ? "selected" : ""}>Peer Leader</option>
+            <option value="teacher" ${rosterFilterRole === "teacher" ? "selected" : ""}>Teacher / Admin</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div id="roster-list" class="card"><div class="empty-hint">Loading…</div></div>
+  `;
+  await refreshRosterList();
+}
+
+function onRosterSearchInput(value) {
+  rosterSearchTerm = value;
+  renderRosterList();
+}
+
+function onRosterRoleFilterChange(value) {
+  rosterFilterRole = value;
+  renderRosterList();
+}
+
+async function refreshRosterList() {
+  await loadRosterCache(true);
+  renderRosterList();
+}
+
+function renderRosterList() {
+  const listEl = document.getElementById("roster-list");
+  if (!listEl) return;
+
+  const term = rosterSearchTerm.trim().toLowerCase();
+  const filtered = rosterCache.filter((u) => {
+    if (rosterFilterRole !== "all" && (u.role || "student") !== rosterFilterRole) return false;
+    if (!term) return true;
+    return (u.name || "").toLowerCase().includes(term)
+      || (u.studentNumber || u.id || "").toLowerCase().includes(term)
+      || (u.email || "").toLowerCase().includes(term);
+  });
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = `<div class="empty-hint">No students match.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = filtered.map((u) => {
+    const studentNum = u.studentNumber || u.id;
+    const isSelf = studentNum === currentStudentNumber;
+    return `<div class="list-row">
+      <div>
+        <div class="row-title">${escapeHtml(u.name || "Untitled")} <span class="row-sub mono">· ${escapeHtml(studentNum || "")}</span></div>
+        <div class="row-sub">${escapeHtml(u.email || "No email on file")}${u.classPeriod ? " · " + escapeHtml(u.classPeriod) : ""}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <select onchange="editRosterRole('${u.id}', this.value)" ${isSelf ? "disabled title=\\"Can't change your own role here\\"" : ""}>
+          <option value="student" ${(u.role || "student") === "student" ? "selected" : ""}>Student</option>
+          <option value="peer_leader" ${u.role === "peer_leader" ? "selected" : ""}>Peer Leader</option>
+          <option value="teacher" ${u.role === "teacher" ? "selected" : ""}>Teacher / Admin</option>
+        </select>
+        <button class="mini-btn danger" onclick="deleteRosterUser('${u.id}')" ${isSelf ? "disabled title=\\"Can't delete your own account while logged in\\"" : ""}>Delete</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function addStudentSingle() {
+  const statusEl = document.getElementById("add-student-status");
+  const setStatus = (kind, text) => { if (statusEl) { statusEl.className = "status-msg " + kind; statusEl.textContent = text; } };
+
+  const studentNumber = document.getElementById("new-student-number").value.trim();
+  const name = document.getElementById("new-student-name").value.trim();
+  const email = document.getElementById("new-student-email").value.trim();
+  const role = document.getElementById("new-student-role").value;
+  const classPeriod = document.getElementById("new-student-period").value.trim();
+
+  if (!studentNumber || !name) {
+    setStatus("error", "Student ID and name are required.");
+    return;
+  }
+
+  try {
+    await db.collection("users").doc(studentNumber).set({
+      studentNumber, name, email: email || null, role, classPeriod: classPeriod || null,
+    }, { merge: true });
+
+    document.getElementById("new-student-number").value = "";
+    document.getElementById("new-student-name").value = "";
+    document.getElementById("new-student-email").value = "";
+    document.getElementById("new-student-period").value = "";
+    setStatus("success", `Added ${name}.`);
+    await refreshRosterList();
+  } catch (err) {
+    setStatus("error", "Couldn't add student: " + err.message);
+  }
+}
+
+async function editRosterRole(userId, newRole) {
+  await db.collection("users").doc(userId).update({ role: newRole });
+  await refreshRosterList();
+}
+
+async function deleteRosterUser(userId) {
+  const user = rosterCache.find((u) => u.id === userId);
+  const confirmed = confirm(`Delete ${user ? user.name : "this student"} from the roster? Their past submissions stay in the queue history, but they won't be able to log in anymore.`);
+  if (!confirmed) return;
+  await db.collection("users").doc(userId).delete();
+  await refreshRosterList();
+}
+
+/* ---- CSV mass import ---- */
+
+function onRosterCsvChosen() {
+  const fileInput = document.getElementById("roster-csv-file");
+  const previewEl = document.getElementById("roster-csv-preview");
+  if (!fileInput.files.length) return;
+
+  if (typeof Papa === "undefined") {
+    previewEl.innerHTML = `<div class="empty-hint">CSV parsing library didn't load — check your connection and try again.</div>`;
+    return;
+  }
+
+  previewEl.innerHTML = `<div class="empty-hint">Reading file…</div>`;
+
+  Papa.parse(fileInput.files[0], {
+    header: true,
+    skipEmptyLines: true,
+    complete: (results) => {
+      const errors = [];
+      const seen = new Set();
+      const rows = results.data.map((raw, idx) => {
+        const studentNumber = (raw.studentNumber || raw.StudentNumber || raw["Student ID"] || "").toString().trim();
+        const name = (raw.name || raw.Name || "").toString().trim();
+        const email = (raw.email || raw.Email || "").toString().trim();
+        let role = (raw.role || raw.Role || "student").toString().trim().toLowerCase() || "student";
+        const classPeriod = (raw.classPeriod || raw.ClassPeriod || raw["Class Period"] || "").toString().trim();
+
+        const rowErrors = [];
+        if (!studentNumber) rowErrors.push("missing Student ID");
+        if (!name) rowErrors.push("missing name");
+        if (!ROSTER_VALID_ROLES.includes(role)) {
+          rowErrors.push(`unrecognized role "${role}" — defaulting to student`);
+          role = "student";
+        }
+        if (studentNumber && seen.has(studentNumber)) rowErrors.push("duplicate Student ID within this file");
+        if (studentNumber) seen.add(studentNumber);
+
+        if (rowErrors.length) errors.push(`Row ${idx + 2}: ${rowErrors.join(", ")}`);
+
+        return { studentNumber, name, email, role, classPeriod, valid: !!studentNumber && !!name };
+      });
+
+      rosterCsvRows = rows;
+      rosterCsvErrors = errors;
+      renderRosterCsvPreview();
+    },
+    error: (err) => {
+      previewEl.innerHTML = `<div class="empty-hint">Couldn't read that file: ${escapeHtml(err.message)}</div>`;
+    },
+  });
+}
+
+function renderRosterCsvPreview() {
+  const previewEl = document.getElementById("roster-csv-preview");
+  if (!previewEl || !rosterCsvRows) return;
+
+  const validRows = rosterCsvRows.filter((r) => r.valid);
+  const existingIds = new Set(rosterCache.map((u) => u.studentNumber || u.id));
+  const newCount = validRows.filter((r) => !existingIds.has(r.studentNumber)).length;
+  const updateCount = validRows.length - newCount;
+
+  previewEl.innerHTML = `
+    <div class="row-sub" style="margin-bottom:10px;">
+      Found ${rosterCsvRows.length} row${rosterCsvRows.length === 1 ? "" : "s"} — ${validRows.length} usable
+      (${newCount} new, ${updateCount} will update existing students)${rosterCsvErrors.length ? `, ${rosterCsvErrors.length} row issue${rosterCsvErrors.length === 1 ? "" : "s"} flagged below` : ""}.
+    </div>
+    ${rosterCsvErrors.length ? `<div class="flag-note" style="margin-bottom:10px;">${rosterCsvErrors.map((e) => escapeHtml(e)).join("<br/>")}</div>` : ""}
+    <div style="max-height:240px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; margin-bottom:12px;">
+      ${validRows.slice(0, 200).map((r) => `<div class="list-row" style="padding:8px 12px;">
+        <div class="row-sub mono">${escapeHtml(r.studentNumber)}</div>
+        <div class="row-sub">${escapeHtml(r.name)}${r.email ? " · " + escapeHtml(r.email) : ""} · ${escapeHtml(r.role)}</div>
+      </div>`).join("")}
+      ${validRows.length > 200 ? `<div class="empty-hint">…and ${validRows.length - 200} more</div>` : ""}
+    </div>
+    <div class="queue-actions">
+      <button class="mini-btn" ${validRows.length === 0 ? "disabled" : ""} onclick="confirmRosterImport()">Import ${validRows.length} student${validRows.length === 1 ? "" : "s"}</button>
+      <button class="mini-btn plain" onclick="cancelRosterImport()">Cancel</button>
+    </div>
+    <div class="status-msg" id="roster-import-status"></div>
+  `;
+}
+
+function cancelRosterImport() {
+  rosterCsvRows = null;
+  rosterCsvErrors = [];
+  const fileInput = document.getElementById("roster-csv-file");
+  if (fileInput) fileInput.value = "";
+  const previewEl = document.getElementById("roster-csv-preview");
+  if (previewEl) previewEl.innerHTML = "";
+}
+
+async function confirmRosterImport() {
+  if (!rosterCsvRows) return;
+  const statusEl = document.getElementById("roster-import-status");
+  const setStatus = (kind, text) => { if (statusEl) { statusEl.className = "status-msg " + kind; statusEl.textContent = text; } };
+
+  const validRows = rosterCsvRows.filter((r) => r.valid);
+  setStatus("pending", "Importing…");
+
+  // Firestore batched writes cap at 500 ops — chunk in case a roster is huge.
+  const CHUNK_SIZE = 400;
+  try {
+    for (let i = 0; i < validRows.length; i += CHUNK_SIZE) {
+      const chunk = validRows.slice(i, i + CHUNK_SIZE);
+      const writeBatch = db.batch();
+      chunk.forEach((r) => {
+        writeBatch.set(db.collection("users").doc(r.studentNumber), {
+          studentNumber: r.studentNumber,
+          name: r.name,
+          email: r.email || null,
+          role: r.role,
+          classPeriod: r.classPeriod || null,
+        }, { merge: true });
+      });
+      await writeBatch.commit();
+    }
+    setStatus("success", `Imported ${validRows.length} student${validRows.length === 1 ? "" : "s"}.`);
+    cancelRosterImport();
+    await refreshRosterList();
+  } catch (err) {
+    setStatus("error", "Import failed partway through: " + err.message);
+  }
 }
 
 </script>
